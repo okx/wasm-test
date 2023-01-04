@@ -2,10 +2,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use cosmwasm_std::Uint128;
-use cosmwasm_std::{CosmosMsg,CustomMsg};
-use schemars::gen::SchemaGenerator;
-use schemars::schema::Schema;
-
 #[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema)]
 pub struct InitialBalance {
     pub address: String,

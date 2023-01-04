@@ -1,6 +1,6 @@
 use cosmwasm_std::{
     entry_point, to_binary, to_vec, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Response,
-    StdResult, Storage, Uint128,SubMsg,CosmosMsg
+    StdResult, Storage, Uint128
 };
 use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
 use std::convert::TryInto;
@@ -63,7 +63,7 @@ pub fn execute(
     env: Env,
     info: MessageInfo,
     msg: ExecuteMsg,
-) -> Result<Response<SendToEvmMsg>, ContractError> {
+) -> Result<Response, ContractError> {
     match msg {
         ExecuteMsg::Approve { spender, amount } => try_approve(deps, env, info, spender, &amount),
         ExecuteMsg::Transfer { recipient, amount } => {
@@ -106,7 +106,7 @@ fn try_transfer(
     info: MessageInfo,
     recipient: String,
     amount: &Uint128,
-) -> Result<Response<SendToEvmMsg>, ContractError> {
+) -> Result<Response, ContractError> {
     perform_transfer(
         deps.storage,
         &info.sender,
@@ -126,7 +126,7 @@ fn try_transfer_from(
     owner: String,
     recipient: String,
     amount: &Uint128,
-) -> Result<Response<SendToEvmMsg>, ContractError> {
+) -> Result<Response, ContractError> {
     let owner_address = deps.api.addr_validate(owner.as_str())?;
     let recipient_address = deps.api.addr_validate(recipient.as_str())?;
     let amount_raw = amount.u128();
@@ -155,7 +155,7 @@ fn try_approve(
     info: MessageInfo,
     spender: String,
     amount: &Uint128,
-) -> Result<Response<SendToEvmMsg>, ContractError> {
+) -> Result<Response, ContractError> {
     let spender_address = deps.api.addr_validate(spender.as_str())?;
     write_allowance(deps.storage, &info.sender, &spender_address, amount.u128())?;
     Ok(Response::new()
@@ -174,7 +174,7 @@ fn try_burn(
     _env: Env,
     info: MessageInfo,
     amount: &Uint128,
-) -> Result<Response<SendToEvmMsg>, ContractError> {
+) -> Result<Response, ContractError> {
     let amount_raw = amount.u128();
 
     let mut account_balance = read_balance(deps.storage, &info.sender)?;
