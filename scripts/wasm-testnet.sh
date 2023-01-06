@@ -36,7 +36,7 @@ proposal_deposit="100okt"
 # usage:
 #   proposal_vote {proposal_id}
 proposal_vote() {
-  ./vote.sh $1 $CHAIN_ID
+  ./vote.sh $1 $CHAIN_ID $NODE
 }
 
 #####################################################
@@ -695,6 +695,56 @@ tx_hash=$(echo "$res" | jq '.txhash' | sed 's/\"//g')
 echo "txhash: $tx_hash"
 burner_code_id=$(echo "$res" | jq '.logs[0].events[1].attributes[0].value' | sed 's/\"//g')
 echo "burner_code_id: $burner_code_id"
+
+# claim okt from contract
+res=$(exchaincli tx wasm store $contract_dir/cw4-stake/artifacts/cw4_stake.wasm --from captain $TX_EXTRA)
+echo "store cw4-stake succeed"
+cw4_code_id=$(echo "$res" | jq '.logs[0].events[1].attributes[0].value' | sed 's/\"//g')
+
+res=$(exchaincli tx wasm instantiate "$cw4_code_id" '{"denom":{"native":"okt"},"min_bond":"10","tokens_per_weight":"10","unbonding_period":{"height":1}}' --label cw4-stake --admin $captain --from captain $TX_EXTRA)
+echo "instantiate cw4-stake succeed"
+cw4contractAddr=$(echo "$res" | jq '.logs[0].events[0].attributes[0].value' | sed 's/\"//g')
+echo "cw4-stake contractAddr: $cw4contractAddr"
+denom=$(exchaincli query wasm contract-state smart "$cw4contractAddr" '{"staked":{"address":"'$captain'"}}' $QUERY_EXTRA | jq '.data.denom.native' | sed 's/\"//g')
+if [[ $denom != "okt" ]];
+then
+  echo "unexpected native denom: $denom"
+  exit 1
+fi;
+
+res=$(exchaincli tx wasm execute "$cw4contractAddr" '{"bond":{}}' --amount=10okt --from captain $TX_EXTRA)
+amount=$(echo $res | jq '.logs[0].events[2].attributes[2].value' | sed 's/\"//g')
+if [[ $amount != "10000000000000000000" ]];
+then
+  echo "unexpected bond amount: $amount"
+  exit 1
+fi;
+
+stake=$(exchaincli query wasm contract-state smart "$cw4contractAddr" '{"staked":{"address":"'$captain'"}}' $QUERY_EXTRA | jq '.data.stake' | sed 's/\"//g')
+if [[ $stake != $amount ]];
+then
+  echo "unexpected stake amount: $stake"
+  exit 1
+fi
+
+res=$(exchaincli tx wasm execute "$cw4contractAddr" '{"unbond":{"tokens":"'$stake'"}}' --from captain $TX_EXTRA)
+
+stake=$(exchaincli query wasm contract-state smart "$cw4contractAddr" '{"staked":{"address":"'$captain'"}}' $QUERY_EXTRA | jq '.data.stake' | sed 's/\"//g')
+if [[ $stake != "0" ]];
+then
+  echo "unexpected stake amount after unbond: $stake"
+  exit 1
+fi
+
+res=$(exchaincli tx wasm execute "$cw4contractAddr" '{"claim":{}}' --from captain $TX_EXTRA)
+transferAmount=$(echo $res | jq '.logs[0].events[2].attributes[2].value' | sed 's/\"//g')
+if [[ $transferAmount != "10.000000000000000000okt" ]];
+then
+  echo "unexpected transferAmount: $transferAmount"
+  exit 1
+fi
+
+echo "claim okt from caontract succeed"
 
 # update whitelist
 res=$(exchaincli tx gov submit-proposal update-wasm-deployment-whitelist "ex15s4kccjpw8dkgujhqfjw2mu47rc95rphlettns,ex1gwcgl6g8k5ncyanuhk4pz9js9mrdqt657xxa8z" --deposit ${proposal_deposit} --title "test title" --description "test description" --from captain $TX_EXTRA)
