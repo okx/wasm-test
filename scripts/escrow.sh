@@ -1,5 +1,7 @@
 . ./utils.sh
 
+exchaincli keys add user --recover -m "rifle purse jacket embody deny win where finish door awful space pencil" -y
+
 contract_dir=$(get_contract_dir escrow)
 check_file_exit $contract_dir
 

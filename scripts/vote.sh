@@ -19,8 +19,8 @@ function testnetvote() {
 }
 
 function localnetvote() {
-  echo "localnet start"
-  exchaincli tx gov vote $1 yes -y -b block --fees 0.004okt --gas 2000000 --from captain
+  echo "vote: $1"
+  res=$(exchaincli tx gov vote $1 yes -y -b block --fees 0.004okt --gas 2000000 --from captain)
 }
 
 case "$2" in

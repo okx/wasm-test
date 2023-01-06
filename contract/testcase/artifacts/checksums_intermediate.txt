@@ -1,0 +1,2 @@
+1c47e7175ff38d9e4588dbb6afb62bfbdca96449995b9bbae67fc3af68c50fc2  ./target/wasm32-unknown-unknown/release/cw_erc20.wasm
+6a058c85aad309b9208282e649fbaa116e6cc42a515cff593c70b2b77af7ee02  ./target/wasm32-unknown-unknown/release/testcase.wasm
