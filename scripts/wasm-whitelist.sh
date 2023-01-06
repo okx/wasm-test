@@ -75,9 +75,6 @@ while getopts "c:i:" opt; do
   esac
 done
 
-echo $1
-exit 1;
-
 QUERY_EXTRA="--node=$NODE"
 TX_EXTRA_UNBLOCKED="--fees 0.01okt --gas 3000000 --chain-id=$CHAIN_ID --node $NODE -b async -y"
 TX_EXTRA="--fees 0.01okt --gas 3000000 --chain-id=$CHAIN_ID --node $NODE -b block -y"
