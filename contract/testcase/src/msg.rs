@@ -37,6 +37,9 @@ pub enum ExecuteMsg {
     },
     DoReply {
 
+    },
+    CallSubmsg {
+        call:Vec<CustomSubmsg>,
     }
 }
 
@@ -56,3 +59,15 @@ pub struct BalanceResponse {
 pub struct AllowanceResponse {
     pub allowance: Uint128,
 }
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema)]
+pub struct CustomSubmsg {
+    pub calltype: String,
+    pub to: String,
+    pub subcall: String,
+    pub amount: Uint128,
+    pub replyon: String,
+    pub replyid: Uint128,
+    pub gaslimit: Uint128,
+}
+

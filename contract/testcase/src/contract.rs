@@ -1,13 +1,14 @@
-use cosmwasm_std::{
-    entry_point, to_binary, to_vec, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Response,Reply,
-    StdResult, Storage, Uint128,coins,SubMsg,BankMsg,from_binary
-};
+#[cfg(not(feature = "library"))]
+use cosmwasm_std::entry_point;
+
+use cosmwasm_std::{to_binary, to_vec, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Response, Reply, StdResult, Storage, Uint128, coins, SubMsg, BankMsg, ReplyOn, IbcMsg, GovMsg, VoteOption, StakingMsg, DistributionMsg, coin};
+
 
 use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
 use std::convert::TryInto;
 
 use crate::error::ContractError;
-use crate::msg::{AllowanceResponse, BalanceResponse, ExecuteMsg, InstantiateMsg, QueryMsg};
+use crate::msg::{AllowanceResponse, BalanceResponse, ExecuteMsg, InstantiateMsg, QueryMsg,CustomSubmsg};
 use crate::state::Constants;
 
 pub const PREFIX_CONFIG: &[u8] = b"config";
@@ -17,7 +18,10 @@ pub const PREFIX_ALLOWANCES: &[u8] = b"allowances";
 pub const KEY_CONSTANTS: &[u8] = b"constants";
 pub const KEY_TOTAL_SUPPLY: &[u8] = b"total_supply";
 
-#[entry_point]
+pub const REPLY_ID_ERROR: u64 = 0;
+pub const REPLY_ID_SUCCESS: u64 = 1;
+
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
     _env: Env,
@@ -55,10 +59,11 @@ pub fn instantiate(
     config_store.set(KEY_CONSTANTS, &constants);
     config_store.set(KEY_TOTAL_SUPPLY, &total_supply.to_be_bytes());
 
-    Ok(Response::default())
+    Ok(Response::new()
+           .add_attribute("action", "instantiate"))
 }
 
-#[entry_point]
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn execute(
     deps: DepsMut,
     env: Env,
@@ -77,25 +82,28 @@ pub fn execute(
         } => try_transfer_from(deps, env, info, owner, recipient, &amount),
         ExecuteMsg::Burn { amount } => try_burn(deps, env, info, &amount),
         ExecuteMsg::DoReply{} => doreply(deps,env,info),
+        ExecuteMsg::CallSubmsg {call } => do_call_submsg(deps, env, info,call),
     }
 }
 
-#[entry_point]
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn reply(deps: DepsMut, _env: Env, reply: Reply) -> Result<Response, ContractError> {
     match reply.id {
-        1 => Err(ContractError::ContractERC20Err {
-            addr: "invalid haha lifei: {}".to_string().into()
-        }),
-        2 => Err(ContractError::ContractERC20Err {
-            addr: "invalid reply id: {}".to_string().into()
-        }),
+        REPLY_ID_ERROR => Ok(Response::new()
+            .add_attribute("reply_error", reply.id)
+            .add_events(reply.result.unwrap().events)
+            .set_data(reply.result.unwrap().data)),
+        REPLY_ID_SUCCESS => Ok(Response::new()
+            .add_attribute("reply_success", reply.id)
+            .add_events(reply.result.unwrap().events)
+            .set_data(reply.result.unwrap().data)),
         id =>  Err(ContractError::ContractERC20Err {
             addr: "invalid reply id: {}".to_string().into()
         }),
     }
 }
 
-#[entry_point]
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> Result<Binary, ContractError> {
     match msg {
         QueryMsg::Balance { address } => {
@@ -116,6 +124,101 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> Result<Binary, ContractErr
             Ok(out)
         }
     }
+}
+
+
+fn do_call_submsg(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    call: Vec<CustomSubmsg>,
+) -> Result<Response, ContractError> {
+    // // let sub_msg: SubMsg = SubMsg::reply_always(msg, 1).with_gas_limit(60_000);
+    // let sub_msg: SubMsg = SubMsg::reply_always(msg, 1);
+    let mut sub_msgs: Vec<SubMsg> = vec![];
+    let balance = deps.querier.query_balance(&info.sender,"okt");
+    let mut callstre = "".to_string();
+    for v in call {
+        callstre += &v.calltype;
+        if v.calltype.eq("bankmsg".clone()) {
+            let msg = BankMsg::Send {
+                to_address: v.to.to_string(),
+                amount:coins(v.amount.u128(), "okt"),
+            };
+            let mut sub_msg = SubMsg::new(msg);
+
+            match &v.replyon as &str {
+                "always" => {
+                    sub_msg.reply_on = ReplyOn::Always;
+                }
+                "never" => {sub_msg.reply_on = ReplyOn::Never;}
+                "error" => {sub_msg.reply_on = ReplyOn::Error}
+                "success" => {sub_msg.reply_on = ReplyOn::Success}
+                _ => {sub_msg.reply_on = ReplyOn::Never;}
+            }
+            sub_msg.id = v.replyid.u128() as u64;
+            match v.gaslimit.u128() {
+                0 => {}
+                _ => {
+                    let gas_limit  = v.gaslimit.u128() as u64;
+                    sub_msg.gas_limit = gas_limit.into() ;
+                }
+            }
+            sub_msgs.push(sub_msg)
+        }
+        else if v.calltype.eq("wasmmsg".clone()) {
+
+        }
+        else if v.calltype.eq("stakingmsg".clone()) {
+            let msg = StakingMsg::Delegate {
+                validator:v.to,
+                amount:coin(v.amount.u128(), "okt"),
+            };
+            let mut sub_msg = SubMsg::new(msg);
+            sub_msgs.push(sub_msg)
+        }
+        else if v.calltype.eq("distrmsg".clone()) {
+            let msg = DistributionMsg::SetWithdrawAddress {
+                address:v.to,
+            };
+            let mut sub_msg = SubMsg::new(msg);
+
+            sub_msgs.push(sub_msg)
+        }
+        else if v.calltype.eq("govmsg".clone()) {
+            let msg = GovMsg::Vote {
+                proposal_id: 1u64,
+                vote: VoteOption::Yes,
+            };
+            let mut sub_msg = SubMsg::new(msg);
+
+            sub_msgs.push(sub_msg)
+        }
+        else if v.calltype.eq("ibcmsg".clone()) {
+            let timeout = _env.block.time;
+            let msg = IbcMsg::Transfer {
+
+                channel_id: "".to_string(),
+
+                to_address: v.to,
+
+                amount: coin(v.amount.u128(), "okt"),
+                /// when packet times out, measured on remote chain
+                timeout: timeout.into(),
+            };
+            let mut sub_msg = SubMsg::new(msg);
+
+            sub_msgs.push(sub_msg)
+        }
+
+
+    }
+    Ok(Response::new()
+        .add_submessages(sub_msgs)
+        .add_attribute("action", "doreply")
+        .add_attribute("amount", balance.unwrap().amount)
+        .add_attribute("recipient", info.sender)
+        .add_attribute("call", callstre))
 }
 
 fn doreply(

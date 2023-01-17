@@ -12,3 +12,21 @@ if [ ! -d "$1" ]; then
 fi
 return
 }
+
+contains() {
+  if [[ "$1" != *"$2"* ]];
+  then
+    echo "expect contains: $2"
+    echo "got: $1"
+    exit 1
+  fi;
+}
+
+equal() {
+  if [[ "$1" != "$2" ]];
+    then
+      echo "expect: $2"
+      echo "got: $1"
+      exit 1
+    fi;
+}

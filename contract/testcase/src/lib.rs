@@ -7,3 +7,4 @@ pub use msg::{
     AllowanceResponse, BalanceResponse, ExecuteMsg, InitialBalance, InstantiateMsg, QueryMsg,
 };
 pub use state::Constants;
+
