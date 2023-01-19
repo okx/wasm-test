@@ -26,4 +26,7 @@ pub enum ContractError {
 
     #[error("The Contract addr is not expect: {addr}")]
     ContractERC20Err {addr:String},
+
+    #[error("Got a submessage reply with unknown id: {id}")]
+    UnknownReplyId { id: u64 },
 }

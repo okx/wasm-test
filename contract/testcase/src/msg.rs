@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use cosmwasm_std::Uint128;
+use cosmwasm_std::{Binary, Uint128};
 #[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema)]
 pub struct InitialBalance {
     pub address: String,
@@ -64,7 +64,7 @@ pub struct AllowanceResponse {
 pub struct CustomSubmsg {
     pub calltype: String,
     pub to: String,
-    pub subcall: String,
+    pub subcall: Binary,
     pub amount: Uint128,
     pub replyon: String,
     pub replyid: Uint128,

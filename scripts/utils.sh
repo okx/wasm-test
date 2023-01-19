@@ -22,6 +22,15 @@ contains() {
   fi;
 }
 
+nocontains() {
+  if [[ "$1" == *"$2"* ]];
+  then
+      echo "$1"
+      echo "contains: $2"
+      exit 1
+  fi;
+}
+
 equal() {
   if [[ "$1" != "$2" ]];
     then

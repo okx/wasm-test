@@ -1235,6 +1235,7 @@ dependencies = [
  "hex",
  "schemars",
  "serde",
+ "serde_json",
  "thiserror",
 ]
 

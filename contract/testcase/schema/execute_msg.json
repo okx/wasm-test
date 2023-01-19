@@ -140,6 +140,9 @@
       "required": [
         "amount",
         "calltype",
+        "gaslimit",
+        "replyid",
+        "replyon",
         "subcall",
         "to"
       ],
@@ -148,6 +151,15 @@
           "$ref": "#/definitions/Uint128"
         },
         "calltype": {
+          "type": "string"
+        },
+        "gaslimit": {
+          "$ref": "#/definitions/Uint128"
+        },
+        "replyid": {
+          "$ref": "#/definitions/Uint128"
+        },
+        "replyon": {
           "type": "string"
         },
         "subcall": {

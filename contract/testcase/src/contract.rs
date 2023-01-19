@@ -1,7 +1,7 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 
-use cosmwasm_std::{to_binary, to_vec, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Response, Reply, StdResult, Storage, Uint128, coins, SubMsg, BankMsg, ReplyOn, IbcMsg, GovMsg, VoteOption, StakingMsg, DistributionMsg, coin};
+use cosmwasm_std::{to_binary, to_vec, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Response, Reply, StdResult, Storage, Uint128, coins, SubMsg, BankMsg, ReplyOn, IbcMsg, GovMsg, VoteOption, StakingMsg, DistributionMsg, coin, Event, SubMsgExecutionResponse, WasmMsg};
 
 
 use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
@@ -18,8 +18,6 @@ pub const PREFIX_ALLOWANCES: &[u8] = b"allowances";
 pub const KEY_CONSTANTS: &[u8] = b"constants";
 pub const KEY_TOTAL_SUPPLY: &[u8] = b"total_supply";
 
-pub const REPLY_ID_ERROR: u64 = 0;
-pub const REPLY_ID_SUCCESS: u64 = 1;
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
@@ -86,22 +84,6 @@ pub fn execute(
     }
 }
 
-#[cfg_attr(not(feature = "library"), entry_point)]
-pub fn reply(deps: DepsMut, _env: Env, reply: Reply) -> Result<Response, ContractError> {
-    match reply.id {
-        REPLY_ID_ERROR => Ok(Response::new()
-            .add_attribute("reply_error", reply.id)
-            .add_events(reply.result.unwrap().events)
-            .set_data(reply.result.unwrap().data)),
-        REPLY_ID_SUCCESS => Ok(Response::new()
-            .add_attribute("reply_success", reply.id)
-            .add_events(reply.result.unwrap().events)
-            .set_data(reply.result.unwrap().data)),
-        id =>  Err(ContractError::ContractERC20Err {
-            addr: "invalid reply id: {}".to_string().into()
-        }),
-    }
-}
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> Result<Binary, ContractError> {
@@ -152,11 +134,16 @@ fn do_call_submsg(
                     sub_msg.reply_on = ReplyOn::Always;
                 }
                 "never" => {sub_msg.reply_on = ReplyOn::Never;}
-                "error" => {sub_msg.reply_on = ReplyOn::Error}
-                "success" => {sub_msg.reply_on = ReplyOn::Success}
+                "error" => {sub_msg.reply_on = ReplyOn::Error;}
+                "success" => {sub_msg.reply_on = ReplyOn::Success;}
                 _ => {sub_msg.reply_on = ReplyOn::Never;}
             }
-            sub_msg.id = v.replyid.u128() as u64;
+            match v.replyid.u128() {
+                0 => {sub_msg.id = 0;}
+                1 => {sub_msg.id = 1;}
+                _ => {sub_msg.id = 100;}
+            }
+
             match v.gaslimit.u128() {
                 0 => {}
                 _ => {
@@ -168,20 +155,52 @@ fn do_call_submsg(
         }
         else if v.calltype.eq("wasmmsg".clone()) {
 
+            //let subcall  =  to_binary(&v.subcall).unwrap();
+
+            let msg = WasmMsg::Execute {
+                contract_addr: v.to.to_string(),
+                msg:v.subcall,
+                funds:coins(v.amount.u128(), "okt"),
+            };
+            let mut sub_msg = SubMsg::new(msg);
+
+            match &v.replyon as &str {
+                "always" => {
+                    sub_msg.reply_on = ReplyOn::Always;
+                }
+                "never" => {sub_msg.reply_on = ReplyOn::Never;}
+                "error" => {sub_msg.reply_on = ReplyOn::Error;}
+                "success" => {sub_msg.reply_on = ReplyOn::Success;}
+                _ => {sub_msg.reply_on = ReplyOn::Never;}
+            }
+            match v.replyid.u128() {
+                0 => {sub_msg.id = 0;}
+                1 => {sub_msg.id = 1;}
+                _ => {sub_msg.id = 100;}
+            }
+
+            match v.gaslimit.u128() {
+                0 => {}
+                _ => {
+                    let gas_limit  = v.gaslimit.u128() as u64;
+                    sub_msg.gas_limit = gas_limit.into() ;
+                }
+            }
+            sub_msgs.push(sub_msg)
         }
         else if v.calltype.eq("stakingmsg".clone()) {
             let msg = StakingMsg::Delegate {
                 validator:v.to,
                 amount:coin(v.amount.u128(), "okt"),
             };
-            let mut sub_msg = SubMsg::new(msg);
+            let sub_msg = SubMsg::new(msg);
             sub_msgs.push(sub_msg)
         }
         else if v.calltype.eq("distrmsg".clone()) {
             let msg = DistributionMsg::SetWithdrawAddress {
                 address:v.to,
             };
-            let mut sub_msg = SubMsg::new(msg);
+            let sub_msg = SubMsg::new(msg);
 
             sub_msgs.push(sub_msg)
         }
@@ -190,7 +209,7 @@ fn do_call_submsg(
                 proposal_id: 1u64,
                 vote: VoteOption::Yes,
             };
-            let mut sub_msg = SubMsg::new(msg);
+            let sub_msg = SubMsg::new(msg);
 
             sub_msgs.push(sub_msg)
         }
@@ -206,7 +225,7 @@ fn do_call_submsg(
                 /// when packet times out, measured on remote chain
                 timeout: timeout.into(),
             };
-            let mut sub_msg = SubMsg::new(msg);
+            let sub_msg = SubMsg::new(msg);
 
             sub_msgs.push(sub_msg)
         }
@@ -753,7 +772,9 @@ mod tests {
     mod transfer {
         use super::*;
         use crate::error::ContractError;
-        use cosmwasm_std::attr;
+        use cosmwasm_std::{attr, ContractResult, CosmosMsg, from_binary};
+        use crate::ExecuteMsg::DoReply;
+        use crate::reply::reply;
 
         fn make_instantiate_msg() -> InstantiateMsg {
             InstantiateMsg {
@@ -828,6 +849,81 @@ mod tests {
                 33
             );
             assert_eq!(get_total_supply(&deps.storage), 66);
+        }
+        #[test]
+
+        fn can_send_to_existing_recipient1() {
+            let mut deps = mock_dependencies(&[]);
+            let instantiate_msg = make_instantiate_msg();
+            let (env, info) = mock_env_height("creator", 450, 550);
+            let res = instantiate(deps.as_mut(), env, info, instantiate_msg).unwrap();
+            assert_eq!(0, res.messages.len());
+            // Initial state
+            assert_eq!(
+                get_balance(&deps.storage, &Addr::unchecked("addr0000".to_string())),
+                11
+            );
+            assert_eq!(
+                get_balance(&deps.storage, &Addr::unchecked("addr1111".to_string())),
+                22
+            );
+            assert_eq!(
+                get_balance(&deps.storage, &Addr::unchecked("addrbbbb".to_string())),
+                33
+            );
+            assert_eq!(get_total_supply(&deps.storage), 66);
+            let replydata: Reply = Reply{ id: 0, result: ContractResult::Ok(SubMsgExecutionResponse {
+                events: vec![],
+                data: None,
+            }) };
+            let (env, info) = mock_env_height("addr0000", 450, 550);
+            reply(deps.as_mut(),env,replydata);
+            // // Transfer
+            // let docall = ExecuteMsg::DoReply {
+            //
+            // };
+            // let (env, info) = mock_env_height("addr0000", 450, 550);
+            // let transfer_result = execute(deps.as_mut(), env, info, docall).unwrap();
+
+            let docall = ExecuteMsg::CallSubmsg {
+            call:vec![CustomSubmsg
+                {
+                    calltype: "wasmmsg".to_string(),
+                    to: "".to_string(),
+                    subcall: "{\"do_reply\":{}}".to_string(),
+                    amount: Default::default(),
+                    replyon: "".to_string(),
+                    replyid: Default::default(),
+                    gaslimit: Default::default()
+                },
+
+            ]
+            };
+            let (env, info) = mock_env_height("addr0000", 450, 550);
+            let transfer_result = execute(deps.as_mut(), env, info, docall).unwrap();
+            let (env, info) = mock_env_height("addr0000", 450, 550);
+            let subcallmsg = transfer_result.messages.get(0).unwrap();
+            let msglifei = &subcallmsg.msg;
+            match msglifei {
+                CosmosMsg::Wasm(msglifei) => {
+                    match msglifei {
+                        WasmMsg::Execute {contract_addr,msg,funds} => {
+                            let binaryMsg  = from_binary(msg);
+                            // match binaryMsg {
+                            //     ExecuteMsg::DoReply {} => {
+                            //         let transfer_result = execute(deps.as_mut(), env, info, binaryMsg).unwrap();
+                            //     }
+                            //     _ => {}
+                            // }
+
+                    },
+                        _ => {}
+                    }
+
+                },
+                _ => {}
+            }
+
         }
 
         #[test]
