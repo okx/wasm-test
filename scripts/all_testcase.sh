@@ -1,9 +1,10 @@
 . ./utils.sh
 
-
+echo "start"
 exchaincli keys add user --recover -m "rifle purse jacket embody deny win where finish door awful space pencil" -y >/dev/null 2>&1
+temp=$(exchaincli keys add --recover captain -m "puzzle glide follow cruel say burst deliver wild tragic galaxy lumber offer" -y)
 
-res=$(exchaincli tx send captain $(exchaincli keys show user -a) 1000okt --fees 0.001okt -y -b block)
+res=$(exchaincli tx send captain $(exchaincli keys show user -a) 1okt --fees 0.001okt -y -b block)
 
 contract_dir=$(get_contract_dir testcase)
 check_file_exit $contract_dir
@@ -63,7 +64,7 @@ echo "#### smart state"
 exchaincli query wasm contract-state smart "$contractAddr" "{\"balance\":{\"address\":\"${useraddr}\"}}"
 exchaincli query wasm contract-state smart "$contractAddr" '{"balance":{"address":"ex1eutyuqqase3eyvwe92caw8dcx5ly8s544q3hmq"}}'
 
-res=$(exchaincli tx send captain $contractAddr 1000okt --fees 0.001okt -y -b block)
+res=$(exchaincli tx send captain $contractAddr 1okt --fees 0.001okt -y -b block)
 
 
 
