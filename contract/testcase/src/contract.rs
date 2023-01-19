@@ -228,13 +228,16 @@ fn do_call_submsg(
             let sub_msg = SubMsg::new(msg);
 
             sub_msgs.push(sub_msg)
+        } else {
+            return Err(ContractError::UnknownCall {
+            id: v.calltype,
+        });
         }
-
 
     }
     Ok(Response::new()
         .add_submessages(sub_msgs)
-        .add_attribute("action", "doreply")
+        .add_attribute("action", "do_call_submsg")
         .add_attribute("amount", balance.unwrap().amount)
         .add_attribute("recipient", info.sender)
         .add_attribute("call", callstre))
@@ -890,7 +893,7 @@ mod tests {
                 {
                     calltype: "wasmmsg".to_string(),
                     to: "".to_string(),
-                    subcall: "{\"do_reply\":{}}".to_string(),
+                    // subcall: to_binary(),
                     amount: Default::default(),
                     replyon: "".to_string(),
                     replyid: Default::default(),

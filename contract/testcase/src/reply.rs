@@ -39,11 +39,9 @@ fn reply_success(reply:Reply) -> Result<Response, ContractError> {
     match result.data {
         Some(data) => { Ok(Response::new()
             .add_attribute("reply_success", reply.id.to_string())
-            .add_events(events)
             .set_data(data))},
         _ =>{Ok(Response::new()
-            .add_attribute("reply_success", reply.id.to_string())
-            .add_events(events))},
+            .add_attribute("reply_success", reply.id.to_string()))},
     }
 
 }

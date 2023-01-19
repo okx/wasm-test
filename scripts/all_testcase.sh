@@ -27,6 +27,20 @@ expect_log_prefix="{\"key\":\"action\",\"value\":\"instantiate\"}"
 
 contains $raw_log $expect_log_prefix
 contractAddr1=$(echo "$res" | jq '.logs[0].events[0].attributes[0].value' | sed 's/\"//g')
+
+res=$(exchaincli tx wasm instantiate "$code_id" "{\"decimals\":10,\"initial_balances\":[{\"address\":\"${useraddr}\",\"amount\":\"100000000\"}],\"name\":\"my test token\", \"symbol\":\"MTT\"}" --label test1 --admin ${useraddr} --fees 0.001okt --from user -b block -y)
+raw_log=$(echo "$res" | jq -r '.raw_log')
+expect_log_prefix="{\"key\":\"action\",\"value\":\"instantiate\"}"
+
+contains $raw_log $expect_log_prefix
+contractAddr2=$(echo "$res" | jq '.logs[0].events[0].attributes[0].value' | sed 's/\"//g')
+
+res=$(exchaincli tx wasm instantiate "$code_id" "{\"decimals\":10,\"initial_balances\":[{\"address\":\"${useraddr}\",\"amount\":\"100000000\"}],\"name\":\"my test token\", \"symbol\":\"MTT\"}" --label test1 --admin ${useraddr} --fees 0.001okt --from user -b block -y)
+raw_log=$(echo "$res" | jq -r '.raw_log')
+expect_log_prefix="{\"key\":\"action\",\"value\":\"instantiate\"}"
+
+contains $raw_log $expect_log_prefix
+contractAddr3=$(echo "$res" | jq '.logs[0].events[0].attributes[0].value' | sed 's/\"//g')
 #echo " ========================================================== "
 #echo "## show all codes uploaded ##"
 #exchaincli query wasm list-code
@@ -248,15 +262,157 @@ reply_log='The Contract addr is not expect: 0'
 contains "$raw_log" "$reply_log"
 
 
-echo "28.#### 1 wasmmsg success replySuccess success"
+echo "28.#### 2 level wasmmsg call success"
 subcall=$(echo '{"do_reply":{}}' | base64)
 res=$(exchaincli tx wasm execute "$contractAddr" "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr1\",\"subcall\":\"$subcall\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" --fees 0.001okt --gas 2000000 --from user -b block -y)
-echo "contract",$contractAddr
-echo "contract1",$contractAddr1
-echo $res
 raw_log=$(echo "$res" | jq '.raw_log')
-reply_log='{ "key": "reply_success", "value": "1" }'
+reply_log='{\"key\":\"action\",\"value\":\"doreply\"}'
 contains "$raw_log" "$reply_log"
+
+echo "29.#### 3 level wasmmsg call success"
+subcall2=$(echo '{"do_reply":{}}' | base64)
+subcall1=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr2\",\"subcall\":\"$subcall2\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" | base64)
+res=$(exchaincli tx wasm execute "$contractAddr" "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr1\",\"subcall\":\"$subcall1\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" --fees 0.001okt --gas 2000000 --from user -b block -y)
+raw_log=$(echo "$res" | jq '.raw_log')
+reply_log='{\"key\":\"action\",\"value\":\"doreply\"}'
+contains "$raw_log" "$reply_log"
+contains "$raw_log" "$contractAddr"
+contains "$raw_log" "$contractAddr1"
+contains "$raw_log" "$contractAddr2"
+
+
+echo "30.#### 3 level wasmmsg call the second failed"
+subcall2=$(echo '{"do_reply":{}}' | base64)
+subcall1=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"errorcall\",\"to\":\"$contractAddr2\",\"subcall\":\"$subcall2\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" | base64)
+res=$(exchaincli tx wasm execute "$contractAddr" "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr1\",\"subcall\":\"$subcall1\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" --fees 0.001okt --gas 2000000 --from user -b block -y)
+raw_log=$(echo "$res" | jq '.raw_log')
+reply_log='Unknown Call : errorcall'
+contains "$raw_log" "$reply_log"
+
+echo "31.#### 3 level wasmmsg call the third failed"
+subcall2=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"errorcall1\",\"to\":\"$addr1\",\"subcall\":\"\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" | base64)
+subcall1=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr2\",\"subcall\":\"$subcall2\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" | base64)
+res=$(exchaincli tx wasm execute "$contractAddr" "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr1\",\"subcall\":\"$subcall1\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" --fees 0.001okt --gas 2000000 --from user -b block -y)
+raw_log=$(echo "$res" | jq '.raw_log')
+reply_log='Unknown Call : errorcall1'
+contains "$raw_log" "$reply_log"
+
+echo "32.#### 3 level wasmmsg call repleySuccess success"
+subcall2=$(echo '{"do_reply":{}}' | base64)
+subcall1=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr2\",\"subcall\":\"$subcall2\",\"amount\":\"1\",\"replyon\":\"success\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" | base64)
+res=$(exchaincli tx wasm execute "$contractAddr" "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr1\",\"subcall\":\"$subcall1\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" --fees 0.001okt --gas 2000000 --from user -b block -y)
+raw_log=$(echo "$res" | jq '.raw_log')
+reply_log='{\"key\":\"action\",\"value\":\"doreply\"}'
+contains "$raw_log" "$reply_log"
+reply_log='{\"key\":\"reply_success\",\"value\":\"1\"}'
+contains "$raw_log" "$reply_log"
+contains "$raw_log" "$contractAddr"
+contains "$raw_log" "$contractAddr1"
+contains "$raw_log" "$contractAddr2"
+
+echo "33.#### 3 level wasmmsg call repleySuccess failed"
+subcall2=$(echo '{"do_reply":{}}' | base64)
+subcall1=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr2\",\"subcall\":\"$subcall2\",\"amount\":\"1\",\"replyon\":\"success\",\"replyid\":\"0\",\"gaslimit\":\"0\"}]}}" | base64)
+res=$(exchaincli tx wasm execute "$contractAddr" "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr1\",\"subcall\":\"$subcall1\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" --fees 0.001okt --gas 2000000 --from user -b block -y)
+raw_log=$(echo "$res" | jq '.raw_log')
+failed_log='The Contract addr is not expect: 0'
+contains "$raw_log" "$failed_log"
+
+
+echo "34.#### 3 level wasmmsg error call repleySuccess"
+subcall2=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"errorcall1\",\"to\":\"$addr1\",\"subcall\":\"\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" | base64)
+subcall1=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr2\",\"subcall\":\"$subcall2\",\"amount\":\"1\",\"replyon\":\"success\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" | base64)
+res=$(exchaincli tx wasm execute "$contractAddr" "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr1\",\"subcall\":\"$subcall1\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" --fees 0.001okt --gas 2000000 --from user -b block -y)
+raw_log=$(echo "$res" | jq '.raw_log')
+reply_log='Unknown Call : errorcall1'
+contains "$raw_log" "$reply_log"
+
+
+echo "35.#### 3 level wasmmsg error call repleyNever "
+subcall2=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"errorcall1\",\"to\":\"$addr1\",\"subcall\":\"\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" | base64)
+subcall1=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr2\",\"subcall\":\"$subcall2\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" | base64)
+res=$(exchaincli tx wasm execute "$contractAddr" "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr1\",\"subcall\":\"$subcall1\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" --fees 0.001okt --gas 2000000 --from user -b block -y)
+raw_log=$(echo "$res" | jq '.raw_log')
+reply_log='Unknown Call : errorcall1'
+contains "$raw_log" "$reply_log"
+
+echo "36.#### 3 level wasmmsg call repleyNever"
+subcall2=$(echo '{"do_reply":{}}' | base64)
+subcall1=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr2\",\"subcall\":\"$subcall2\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" | base64)
+res=$(exchaincli tx wasm execute "$contractAddr" "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr1\",\"subcall\":\"$subcall1\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" --fees 0.001okt --gas 2000000 --from user -b block -y)
+raw_log=$(echo "$res" | jq '.raw_log')
+reply_log='{\"key\":\"action\",\"value\":\"doreply\"}'
+contains "$raw_log" "$reply_log"
+contains "$raw_log" "$contractAddr"
+contains "$raw_log" "$contractAddr1"
+contains "$raw_log" "$contractAddr2"
+
+
+echo "37.#### 3 level wasmmsg error call repleyError "
+subcall2=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"errorcall1\",\"to\":\"$addr1\",\"subcall\":\"\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" | base64)
+subcall1=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr2\",\"subcall\":\"$subcall2\",\"amount\":\"1\",\"replyon\":\"error\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" | base64)
+res=$(exchaincli tx wasm execute "$contractAddr" "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr1\",\"subcall\":\"$subcall1\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" --fees 0.001okt --gas 2000000 --from user -b block -y)
+raw_log=$(echo "$res" | jq '.raw_log')
+reply_log='{\"key\":\"action\",\"value\":\"do_call_submsg\"}'
+contains "$raw_log" "$reply_log"
+contains "$raw_log" "$contractAddr"
+contains "$raw_log" "$contractAddr1"
+reply_log='{\"key\":\"reply_success\",\"value\":\"1\"}'
+contains "$raw_log" "$reply_log"
+
+echo "38.#### 3 level wasmmsg call repleyError"
+subcall2=$(echo '{"do_reply":{}}' | base64)
+subcall1=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr2\",\"subcall\":\"$subcall2\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" | base64)
+res=$(exchaincli tx wasm execute "$contractAddr" "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr1\",\"subcall\":\"$subcall1\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" --fees 0.001okt --gas 2000000 --from user -b block -y)
+raw_log=$(echo "$res" | jq '.raw_log')
+reply_log='{\"key\":\"action\",\"value\":\"doreply\"}'
+contains "$raw_log" "$reply_log"
+contains "$raw_log" "$contractAddr"
+contains "$raw_log" "$contractAddr1"
+contains "$raw_log" "$contractAddr2"
+reply_log='{\"key\":\"reply_success\",\"value\":\"1\"}'
+contains "$raw_log" "$reply_log"
+
+
+echo "39.#### 3 level wasmmsg call repleyAlways success"
+subcall2=$(echo '{"do_reply":{}}' | base64)
+subcall1=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr2\",\"subcall\":\"$subcall2\",\"amount\":\"1\",\"replyon\":\"always\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" | base64)
+res=$(exchaincli tx wasm execute "$contractAddr" "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr1\",\"subcall\":\"$subcall1\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" --fees 0.001okt --gas 2000000 --from user -b block -y)
+raw_log=$(echo "$res" | jq '.raw_log')
+reply_log='{\"key\":\"action\",\"value\":\"doreply\"}'
+contains "$raw_log" "$reply_log"
+contains "$raw_log" "$contractAddr"
+contains "$raw_log" "$contractAddr1"
+contains "$raw_log" "$contractAddr2"
+reply_log='{\"key\":\"reply_success\",\"value\":\"1\"}'
+contains "$raw_log" "$reply_log"
+
+echo "40.#### 3 level wasmmsg call repleyAlways failed"
+subcall2=$(echo '{"do_reply":{}}' | base64)
+subcall1=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr2\",\"subcall\":\"$subcall2\",\"amount\":\"1\",\"replyon\":\"always\",\"replyid\":\"0\",\"gaslimit\":\"0\"}]}}" | base64)
+res=$(exchaincli tx wasm execute "$contractAddr" "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr1\",\"subcall\":\"$subcall1\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" --fees 0.001okt --gas 2000000 --from user -b block -y)
+raw_log=$(echo "$res" | jq '.raw_log')
+failed_log='The Contract addr is not expect: 0'
+contains "$raw_log" "$failed_log"
+
+echo "41.#### 3 level wasmmsg errorcall repleyAlways success"
+subcall2=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"errorcall1\",\"to\":\"$addr1\",\"subcall\":\"\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" | base64)
+subcall1=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr2\",\"subcall\":\"$subcall2\",\"amount\":\"1\",\"replyon\":\"always\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" | base64)
+res=$(exchaincli tx wasm execute "$contractAddr" "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr1\",\"subcall\":\"$subcall1\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" --fees 0.001okt --gas 2000000 --from user -b block -y)
+raw_log=$(echo "$res" | jq '.raw_log')
+contains "$raw_log" "$contractAddr"
+contains "$raw_log" "$contractAddr1"
+reply_log='{\"key\":\"reply_success\",\"value\":\"1\"}'
+contains "$raw_log" "$reply_log"
+
+echo "42.#### 3 level wasmmsg errorcall repleyAlways failed"
+subcall2=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"errorcall1\",\"to\":\"$addr1\",\"subcall\":\"\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" | base64)
+subcall1=$(echo "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr2\",\"subcall\":\"$subcall2\",\"amount\":\"1\",\"replyon\":\"always\",\"replyid\":\"0\",\"gaslimit\":\"0\"}]}}" | base64)
+res=$(exchaincli tx wasm execute "$contractAddr" "{\"call_submsg\":{\"call\":[{\"calltype\":\"wasmmsg\",\"to\":\"$contractAddr1\",\"subcall\":\"$subcall1\",\"amount\":\"1\",\"replyon\":\"never\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" --fees 0.001okt --gas 2000000 --from user -b block -y)
+raw_log=$(echo "$res" | jq '.raw_log')
+failed_log='The Contract addr is not expect: 0'
+contains "$raw_log" "$failed_log"
+
 
 #exchaincli tx wasm execute "$contractAddr" '{"do_reply":{}}' --fees 0.001okt --from user -b block -y
 
