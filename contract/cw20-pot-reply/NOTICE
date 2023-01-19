@@ -1,5 +1,4 @@
-CW20-Base: A reference implementation for fungible token on CosmWasm
-Copyright (C) 2020 Confio OÜ
+Copyright 2022 xingqiang.yuan <xingqiang.yuan@okg.com>
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
