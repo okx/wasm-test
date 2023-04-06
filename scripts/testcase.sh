@@ -26,33 +26,34 @@ proposal_vote() {
 }
 
 #####################################################
+########    rest deployment whitelist     #########
+#####################################################
+echo "## rest wasm code deployment whitelist"
+res=$(exchaincli tx gov submit-proposal update-wasm-deployment-whitelist "nobody" --deposit ${proposal_deposit} --title "test title" --description "test description" --from captain $TX_EXTRA)
+proposal_id=$(echo "$res" | jq '.logs[0].events[1].attributes[1].value' | sed 's/\"//g')
+echo "proposal_id: $proposal_id"
+proposal_vote "$proposal_id"
+
+#####################################################
 #############       store code       ################
 #####################################################
 
 echo "## store...everybody nobody"
 res=$(exchaincli tx wasm store $contract_dir/cw20-base/artifacts/cw20_base.wasm --instantiate-everybody=true --from captain $TX_EXTRA)
+echo "scf_log" $res
 raw_log=$(echo "$res" | jq '.raw_log' | sed 's/\"//g')
-failed_log_prefix="unauthorized: can not create code: failed to execute message; message index: 0"
+failed_log_prefix="unauthorized: Failed to create code, nobody allowed to upload contract: failed to execute message; message index: 0"
 if [[ "${raw_log}" != "${failed_log_prefix}" ]];
 then
   echo "expect fail when instantiate contract with invalid amount"
   exit 1
 fi;
 
-echo "## store...nobody nobody"
-res=$(exchaincli tx wasm store $contract_dir/cw20-base/artifacts/cw20_base.wasm --instantiate-nobody=true --from captain $TX_EXTRA)
-raw_log=$(echo "$res" | jq '.raw_log' | sed 's/\"//g')
-failed_log_prefix="unauthorized: can not create code: failed to execute message; message index: 0"
-if [[ "${raw_log}" != "${failed_log_prefix}" ]];
-then
-  echo "expect fail when instantiate contract with invalid amount"
-  exit 1
-fi;
 
 echo "## store...only nobody"
 res=$(exchaincli tx wasm store $contract_dir/cw20-base/artifacts/cw20_base.wasm --instantiate-only-address=$(exchaincli keys show admin17 -a) --from captain $TX_EXTRA)
 raw_log=$(echo "$res" | jq '.raw_log' | sed 's/\"//g')
-failed_log_prefix="unauthorized: can not create code: failed to execute message; message index: 0"
+failed_log_prefix="unauthorized: Failed to create code, nobody allowed to upload contract: failed to execute message; message index: 0"
 if [[ "${raw_log}" != "${failed_log_prefix}" ]];
 then
   echo "expect fail when instantiate contract with invalid amount"
@@ -71,7 +72,7 @@ proposal_vote "$proposal_id"
 echo "## store...everybody special address"
 res=$(exchaincli tx wasm store $contract_dir/cw20-base/artifacts/cw20_base.wasm --instantiate-everybody=true --from admin17 $TX_EXTRA)
 raw_log=$(echo "$res" | jq '.raw_log' | sed 's/\"//g')
-failed_log_prefix="unauthorized: can not create code: failed to execute message; message index: 0"
+failed_log_prefix="unauthorized: Failed to create code, you are not allowed to upload contract as you are not on the authorized list: failed to execute message; message index: 0"
 if [[ "${raw_log}" != "${failed_log_prefix}" ]];
 then
   echo "expect fail when instantiate contract with invalid amount"
@@ -81,23 +82,11 @@ fi;
 res=$(exchaincli tx wasm store $contract_dir/cw20-base/artifacts/cw20_base.wasm --instantiate-everybody=true --from captain $TX_EXTRA)
 cw20_code_id1=$(echo "$res" | jq '.logs[0].events[1].attributes[0].value' | sed 's/\"//g')
 
-echo "## store...nobody special address"
-res=$(exchaincli tx wasm store $contract_dir/cw20-base/artifacts/cw20_base.wasm --instantiate-nobody=true --from admin17 $TX_EXTRA)
-raw_log=$(echo "$res" | jq '.raw_log' | sed 's/\"//g')
-failed_log_prefix="unauthorized: can not create code: failed to execute message; message index: 0"
-if [[ "${raw_log}" != "${failed_log_prefix}" ]];
-then
-  echo "expect fail when instantiate contract with invalid amount"
-  exit 1
-fi;
-
-res=$(exchaincli tx wasm store $contract_dir/cw20-base/artifacts/cw20_base.wasm --instantiate-nobody=true --from captain $TX_EXTRA)
-cw20_code_id2=$(echo "$res" | jq '.logs[0].events[1].attributes[0].value' | sed 's/\"//g')
 
 echo "## store...only special address"
 res=$(exchaincli tx wasm store $contract_dir/cw20-base/artifacts/cw20_base.wasm --instantiate-only-address=$(exchaincli keys show admin17 -a) --from admin17 $TX_EXTRA)
 raw_log=$(echo "$res" | jq '.raw_log' | sed 's/\"//g')
-failed_log_prefix="unauthorized: can not create code: failed to execute message; message index: 0"
+failed_log_prefix="unauthorized: Failed to create code, you are not allowed to upload contract as you are not on the authorized list: failed to execute message; message index: 0"
 if [[ "${raw_log}" != "${failed_log_prefix}" ]];
 then
   echo "expect fail when instantiate contract with invalid amount"

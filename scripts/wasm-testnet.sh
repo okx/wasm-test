@@ -45,7 +45,7 @@ echo "store cw20 contract succeed"
 cw20_code_id1=$(echo "$res" | jq '.logs[0].events[1].attributes[0].value' | sed 's/\"//g')
 
 echo "## store cw20 contract...nobody"
-res=$(exchaincli tx wasm store $contract_dir/cw20-base/artifacts/cw20_base.wasm --instantiate-nobody=true --from captain $TX_EXTRA)
+res=$(exchaincli tx wasm store $contract_dir/cw20-base/artifacts/cw20_base.wasm --instantiate-everybody=true --from captain $TX_EXTRA)
 echo "store cw20 contract succeed"
 cw20_code_id2=$(echo "$res" | jq '.logs[0].events[1].attributes[0].value' | sed 's/\"//g')
 
@@ -100,21 +100,6 @@ then
   exit 1
 fi;
 
-echo "## instantiate nobody..."
-res=$(exchaincli tx wasm instantiate "$cw20_code_id2" '{"decimals":10,"initial_balances":[{"address":"'$captain'","amount":"100000000"}],"name":"my test token", "symbol":"mtt"}' --label test1 --admin "$captain" --from captain $TX_EXTRA)
-raw_log=$(echo "$res" | jq '.raw_log' | sed 's/\"//g')
-failed_log="unauthorized: can not instantiate: failed to execute message; message index: 0"
-if [[ "${raw_log}" != "${failed_log}" ]];
-then
-  exit 1
-fi;
-res=$(exchaincli tx wasm instantiate "$cw20_code_id2" '{"decimals":10,"initial_balances":[{"address":"'$captain'","amount":"100000000"}],"name":"my test token", "symbol":"mtt"}' --label test1 --admin "$captain" --from admin18 $TX_EXTRA)
-raw_log=$(echo "$res" | jq '.raw_log' | sed 's/\"//g')
-failed_log="unauthorized: can not instantiate: failed to execute message; message index: 0"
-if [[ "${raw_log}" != "${failed_log}" ]];
-then
-  exit 1
-fi;
 
 echo "## instantiate only address..."
 res=$(exchaincli tx wasm instantiate "$cw20_code_id3" '{"decimals":10,"initial_balances":[{"address":"'$captain'","amount":"100000000"}],"name":"my test token", "symbol":"mtt"}' --label test1 --admin "$captain" --from captain $TX_EXTRA)
@@ -673,7 +658,7 @@ res=$(exchaincli tx wasm store $contract_dir/test/burner.wasm --from admin18 $TX
 tx_hash=$(echo "$res" | jq '.txhash' | sed 's/\"//g')
 echo "txhash: $tx_hash"
 raw_log=$(echo "$res" | jq '.raw_log' | sed 's/\"//g')
-if [[ $raw_log != "unauthorized: can not create code: failed to execute message; message index: 0" ]];
+if [[ $raw_log != "unauthorized: Failed to create code, you are not allowed to upload contract as you are not on the authorized list: failed to execute message; message index: 0" ]];
 then
   exit 1
 fi;
@@ -741,7 +726,7 @@ proposal_vote "$proposal_id"
 
 res=$(exchaincli tx wasm store $contract_dir/test/burner.wasm --from admin18 $TX_EXTRA)
 raw_log=$(echo "$res" | jq '.raw_log' | sed 's/\"//g')
-failed_log="unauthorized: can not create code: failed to execute message; message index: 0"
+failed_log="unauthorized: Failed to create code, you are not allowed to upload contract as you are not on the authorized list: failed to execute message; message index: 0"
 if [[ "${raw_log}" != "${failed_log}" ]];
 then
   echo "expect fail when update-wasm-deployment-whitelist is nobody"

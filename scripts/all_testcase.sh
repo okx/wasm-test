@@ -89,8 +89,8 @@ res=$(exchaincli tx send captain $contractAddr 1okt --fees 0.001okt -y -b block)
 
 
 
-addr1=$(exchaincli keys add addr1 -y 2>&1 | jq -r '.eth_address')
-addr2=$(exchaincli keys add addr2 -y 2>&1 | jq -r '.eth_address')
+addr1=$(exchaincli keys add addr1 -y 2>&1 | jq -r '.eth_address')  #0x
+addr2=$(exchaincli keys add addr2 -y 2>&1 | jq -r '.address')    #ex
 echo "1.#### 1 submsg success"
 res=$(exchaincli tx wasm execute "$contractAddr" "{\"call_submsg\":{\"call\":[{\"calltype\":\"bankmsg\",\"to\":\"$addr1\",\"subcall\":\"\",\"amount\":\"1\",\"replyon\":\"none\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" --fees 0.001okt --from user -b block -y)
 res=$(exchaincli query account $addr1 2>&1 | jq -r '.value.coins[0].amount')
