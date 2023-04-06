@@ -1,4 +1,25 @@
+source ./localnet-prepare.sh
 . ./utils.sh
+
+TX_EXTRA="--fees 0.01okt --gas 3000000 --chain-id=$CHAIN_ID --node $NODE -b block -y"
+
+temp=$(exchaincli keys add --recover captain -m "puzzle glide follow cruel say burst deliver wild tragic galaxy lumber offer" -y)
+captain=$(exchaincli keys show captain | jq -r '.eth_address')
+proposal_deposit="100okt"
+
+
+# usage:
+#   proposal_vote {proposal_id}
+proposal_vote() {
+  ./vote.sh $1 $CHAIN_ID
+}
+
+echo "## update wasm code deployment whitelist"
+res=$(exchaincli tx gov submit-proposal update-wasm-deployment-whitelist "all" --deposit ${proposal_deposit} --title "test title" --description "test description" --from captain $TX_EXTRA)
+echo $res
+proposal_id=$(echo "$res" | jq '.logs[0].events[1].attributes[1].value' | sed 's/\"//g')
+echo "proposal_id: $proposal_id"
+proposal_vote "$proposal_id"
 
 echo "start"
 exchaincli keys add user --recover -m "rifle purse jacket embody deny win where finish door awful space pencil" -y >/dev/null 2>&1
@@ -9,7 +30,7 @@ res=$(exchaincli tx send captain $(exchaincli keys show user -a) 1okt --fees 0.0
 contract_dir=$(get_contract_dir testcase)
 check_file_exit $contract_dir
 
-useraddr=$(exchaincli keys show user -a)
+useraddr=$(exchaincli keys show user | jq -r '.eth_address')
 res=$(exchaincli tx wasm store $contract_dir/artifacts/testcase.wasm --fees 0.01okt --from user --gas=2000000 -b block -y)
 code_id=$(echo "$res" | jq '.logs[0].events[1].attributes[0].value' | sed 's/\"//g')
 res=$(exchaincli tx wasm instantiate "$code_id" "{\"decimals\":10,\"initial_balances\":[{\"address\":\"${useraddr}\",\"amount\":\"100000000\"}],\"name\":\"my test token\", \"symbol\":\"MTT\"}" --label test1 --admin ${useraddr} --fees 0.001okt --from user -b block -y)
@@ -19,7 +40,7 @@ expect_log_prefix="{\"key\":\"action\",\"value\":\"instantiate\"}"
 contains $raw_log $expect_log_prefix
 
 contractAddr=$(echo "$res" | jq '.logs[0].events[0].attributes[0].value' | sed 's/\"//g')
-res=$(exchaincli tx wasm execute "$contractAddr" '{"transfer":{"amount":"100","recipient":"ex1eutyuqqase3eyvwe92caw8dcx5ly8s544q3hmq"}}' --fees 0.001okt --from user -b block -y)
+res=$(exchaincli tx wasm execute "$contractAddr" '{"transfer":{"amount":"100","recipient":"0xCf164e001d86639231d92Ab1D71DB8353E43C295"}}' --fees 0.001okt --from user -b block -y)
 
 
 res=$(exchaincli tx wasm instantiate "$code_id" "{\"decimals\":10,\"initial_balances\":[{\"address\":\"${useraddr}\",\"amount\":\"100000000\"}],\"name\":\"my test token\", \"symbol\":\"MTT\"}" --label test1 --admin ${useraddr} --fees 0.001okt --from user -b block -y)
@@ -62,14 +83,14 @@ echo "#### raw state"
 exchaincli query wasm contract-state raw "$contractAddr" 0006636F6E666967636F6E7374616E7473
 echo "#### smart state"
 exchaincli query wasm contract-state smart "$contractAddr" "{\"balance\":{\"address\":\"${useraddr}\"}}"
-exchaincli query wasm contract-state smart "$contractAddr" '{"balance":{"address":"ex1eutyuqqase3eyvwe92caw8dcx5ly8s544q3hmq"}}'
+exchaincli query wasm contract-state smart "$contractAddr" '{"balance":{"address":"0xCf164e001d86639231d92Ab1D71DB8353E43C295"}}'
 
 res=$(exchaincli tx send captain $contractAddr 1okt --fees 0.001okt -y -b block)
 
 
 
-addr1=$(exchaincli keys add addr1 -y 2>&1 | jq -r '.address')
-addr2=$(exchaincli keys add addr2 -y 2>&1 | jq -r '.address')
+addr1=$(exchaincli keys add addr1 -y 2>&1 | jq -r '.eth_address')
+addr2=$(exchaincli keys add addr2 -y 2>&1 | jq -r '.eth_address')
 echo "1.#### 1 submsg success"
 res=$(exchaincli tx wasm execute "$contractAddr" "{\"call_submsg\":{\"call\":[{\"calltype\":\"bankmsg\",\"to\":\"$addr1\",\"subcall\":\"\",\"amount\":\"1\",\"replyon\":\"none\",\"replyid\":\"1\",\"gaslimit\":\"0\"}]}}" --fees 0.001okt --from user -b block -y)
 res=$(exchaincli query account $addr1 2>&1 | jq -r '.value.coins[0].amount')
@@ -414,6 +435,7 @@ raw_log=$(echo "$res" | jq '.raw_log')
 failed_log='The Contract addr is not expect: 0'
 contains "$raw_log" "$failed_log"
 
+echo "all cases succeed~"
 
 #exchaincli tx wasm execute "$contractAddr" '{"do_reply":{}}' --fees 0.001okt --from user -b block -y
 

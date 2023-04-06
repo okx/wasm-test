@@ -1,12 +1,29 @@
-CHAIN_ID="exchain-67"
-NODE="http://localhost:26657"
-#NODE="http://18.166.181.170:46657"
+source ./localnet-prepare.sh
 
 QUERY_EXTRA="--node=$NODE"
 TX_EXTRA="--fees 0.01okt --gas 50000000 --chain-id=$CHAIN_ID --node $NODE -b block -y"
-captain=$(exchaincli keys show captain -a)
-admin18=$(exchaincli keys show admin18 -a)
-admin17=$(exchaincli keys show admin17 -a)
+temp=$(exchaincli keys add --recover captain -m "puzzle glide follow cruel say burst deliver wild tragic galaxy lumber offer" -y)
+temp=$(exchaincli keys add --recover admin17 -m "antique onion adult slot sad dizzy sure among cement demise submit scare" -y)
+temp=$(exchaincli keys add --recover admin18 -m "lazy cause kite fence gravity regret visa fuel tone clerk motor rent" -y)
+captain=$(exchaincli keys show captain | jq -r '.eth_address')
+admin18=$(exchaincli keys show admin18 | jq -r '.eth_address')
+admin17=$(exchaincli keys show admin17 | jq -r '.eth_address')
+proposal_deposit="100okt"
+
+
+# usage:
+#   proposal_vote {proposal_id}
+proposal_vote() {
+  ./vote.sh $1 $CHAIN_ID
+}
+
+echo "## update wasm code deployment whitelist"
+res=$(exchaincli tx gov submit-proposal update-wasm-deployment-whitelist "all" --deposit ${proposal_deposit} --title "test title" --description "test description" --from captain $TX_EXTRA)
+echo $res
+proposal_id=$(echo "$res" | jq '.logs[0].events[1].attributes[1].value' | sed 's/\"//g')
+echo "proposal_id: $proposal_id"
+proposal_vote "$proposal_id"
+
 
 . ./utils.sh
 contract_dir=${PWD}/../contract

@@ -1,21 +1,8 @@
 #!/bin/bash
 set -o errexit -o nounset -o pipefail
 
-CHAIN_ID="exchain-65"
-NODE="https://exchaintesttmrpc.okex.org"
-while getopts "c:i:" opt; do
-  case $opt in
-  c)
-    CHAIN_ID=$OPTARG
-    ;;
-  i)
-    NODE="http://$OPTARG:26657"
-    ;;
-  \?)
-    echo "Invalid option: -$OPTARG"
-    ;;
-  esac
-done
+
+source ./localnet-prepare.sh
 
 . ./utils.sh
 contract_dir=${PWD}/../contract
@@ -28,9 +15,9 @@ TX_EXTRA="--fees 0.01okt --gas 3000000 --chain-id=$CHAIN_ID --node $NODE -b bloc
 exchaincli keys add --recover captain -m "puzzle glide follow cruel say burst deliver wild tragic galaxy lumber offer" -y
 exchaincli keys add --recover admin17 -m "antique onion adult slot sad dizzy sure among cement demise submit scare" -y
 exchaincli keys add --recover admin18 -m "lazy cause kite fence gravity regret visa fuel tone clerk motor rent" -y
-captain=$(exchaincli keys show captain -a)
-admin18=$(exchaincli keys show admin18 -a)
-admin17=$(exchaincli keys show admin17 -a)
+captain=$(exchaincli keys show captain | jq -r '.eth_address')
+admin18=$(exchaincli keys show admin18 | jq -r '.eth_address')
+admin17=$(exchaincli keys show admin17 | jq -r '.eth_address')
 proposal_deposit="100okt"
 
 # usage:
@@ -73,7 +60,7 @@ echo "store cw20 contract succeed"
 cw20_code_id4=$(echo "$res" | jq '.logs[0].events[1].attributes[0].value' | sed 's/\"//g')
 
 echo "## store gzipped cw20 contract...null access"
-res=$(exchaincli tx wasm store $contract_dir/test/cw20_base_gzip.wasm --from captain $TX_EXTRA)
+res=$(exchaincli tx wasm store $contract_dir/cw20-base/artifacts/cw20_base.wasm.gz --from captain $TX_EXTRA)
 echo "store cw20 contract succeed"
 cw20_code_id5=$(echo "$res" | jq '.logs[0].events[1].attributes[0].value' | sed 's/\"//g')
 data_hash4=$(exchaincli query wasm code-info "${cw20_code_id4}" $QUERY_EXTRA | jq '.data_hash' | sed 's/\"//g')
@@ -843,4 +830,4 @@ then
   exit 1
 fi;
 
-echo "all query cases succeed~"
+echo "all cases succeed~"

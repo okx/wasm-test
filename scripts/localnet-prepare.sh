@@ -1,7 +1,7 @@
 rm -rf ~/.exchaincli
 
-export CHAIN_ID="exchain-65"
-export NODE="https://exchaintesttmrpc.okex.org"
+CHAIN_ID="exchain-67"
+NODE="http://localhost:26657"
 
 exchaincli config chain-id $CHAIN_ID
 exchaincli config output json

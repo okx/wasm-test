@@ -5,6 +5,7 @@ set -o errexit -o nounset -o pipefail
 #   ./wasm-whitelist nobody
 #   ./wasm-whitelist "addr1,addr2"
 
+source ./localnet-prepare.sh
 
 DEPOSIT1="frozen sign movie blade hundred engage hour remember analyst island churn jealous"
 DEPOSIT2="embrace praise essay heavy rule inner foil mask silk lava mouse still"
@@ -59,21 +60,6 @@ EXCHAIN_DEVNET_VAL_ADMIN_MNEMONIC=(
 
 VAL_NODE_NUM=${#EXCHAIN_DEVNET_VAL_ADMIN_MNEMONIC[@]}
 
-CHAIN_ID="exchain-67"
-NODE="http://localhost:26657"
-while getopts "c:i:" opt; do
-  case $opt in
-  c)
-    CHAIN_ID=$OPTARG
-    ;;
-  i)
-    NODE="http://$OPTARG:26657"
-    ;;
-  \?)
-    echo "Invalid option: -$OPTARG"
-    ;;
-  esac
-done
 
 QUERY_EXTRA="--node=$NODE"
 TX_EXTRA_UNBLOCKED="--fees 0.01okt --gas 3000000 --chain-id=$CHAIN_ID --node $NODE -b async -y"
@@ -85,9 +71,9 @@ exchaincli keys add --recover admin17 -m "antique onion adult slot sad dizzy sur
 exchaincli keys add --recover admin18 -m "lazy cause kite fence gravity regret visa fuel tone clerk motor rent" -y
 
 
-captain=$(exchaincli keys show captain -a)
-admin18=$(exchaincli keys show admin18 -a)
-admin17=$(exchaincli keys show admin17 -a)
+captain=$(exchaincli keys show captain | jq -r '.eth_address')
+admin18=$(exchaincli keys show admin18 | jq -r '.eth_address')
+admin17=$(exchaincli keys show admin17 | jq -r '.eth_address')
 proposal_deposit="100okt"
 
 if [[ $CHAIN_ID == "exchain-64" ]];
@@ -133,7 +119,9 @@ proposal_vote() {
 ########    update deployment whitelist     #########
 #####################################################
 echo "## update wasm code deployment whitelist"
-res=$(exchaincli tx gov submit-proposal update-wasm-deployment-whitelist $1 --deposit ${proposal_deposit} --title "test title" --description "test description" --from captain $TX_EXTRA)
+res=$(exchaincli tx gov submit-proposal update-wasm-deployment-whitelist $captain --deposit ${proposal_deposit} --title "test title" --description "test description" --from captain $TX_EXTRA)
 proposal_id=$(echo "$res" | jq '.logs[0].events[1].attributes[1].value' | sed 's/\"//g')
 echo "proposal_id: $proposal_id"
 proposal_vote "$proposal_id"
+
+echo "all cases succeed~"
