@@ -15,8 +15,7 @@ pub fn reply(deps: DepsMut, _env: Env, reply: Reply) -> Result<Response, Contrac
             ContractResult::Ok(_) => reply_success(reply),
             ContractResult::Err(err) => {
                 Ok(Response::new()
-                    .add_attribute("reply_success", reply.id.to_string())
-                    .add_attribute("reply_success", err))
+                    .add_attribute("reply_success", reply.id.to_string()))
             }
         },
         _ => Err(ContractError::UnknownReplyId { id: reply.id }),
@@ -40,10 +39,9 @@ fn reply_success(reply:Reply) -> Result<Response, ContractError> {
     match result.data {
         Some(data) => { Ok(Response::new()
             .add_attribute("reply_success", reply.id.to_string())
-            .add_attribute("data",data.to_string())
             .set_data(data))},
         _ =>{Ok(Response::new()
-            .add_attribute("reply_success_default", reply.id.to_string()))},
+            .add_attribute("reply_success", reply.id.to_string()))},
     }
 
 }
