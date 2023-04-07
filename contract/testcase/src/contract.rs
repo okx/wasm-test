@@ -1,7 +1,7 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 
-use cosmwasm_std::{to_binary, to_vec, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Response, Reply, StdResult, Storage, Uint128, coins, SubMsg, BankMsg, ReplyOn, IbcMsg, GovMsg, VoteOption, StakingMsg, DistributionMsg, coin, Event, SubMsgExecutionResponse, WasmMsg};
+use cosmwasm_std::{to_binary, to_vec, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Response, Reply, StdResult, Storage, Uint128, coins, SubMsg, BankMsg, ReplyOn, IbcMsg, GovMsg, VoteOption, StakingMsg, DistributionMsg, coin, Event, SubMsgExecutionResponse, WasmMsg, CosmosMsg};
 
 
 use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
@@ -121,10 +121,11 @@ fn do_call_submsg(
     let balance = deps.querier.query_balance(&info.sender,"okt");
     let mut callstre = "".to_string();
     for v in call {
+        let toaddr = deps.api.addr_validate(&v.to)?;
         callstre += &v.calltype;
         if v.calltype.eq("bankmsg".clone()) {
             let msg = BankMsg::Send {
-                to_address: v.to.to_string(),
+                to_address: toaddr.to_string(),
                 amount:coins(v.amount.u128(), "okt"),
             };
             let mut sub_msg = SubMsg::new(msg);
@@ -158,7 +159,7 @@ fn do_call_submsg(
             //let subcall  =  to_binary(&v.subcall).unwrap();
 
             let msg = WasmMsg::Execute {
-                contract_addr: v.to.to_string(),
+                contract_addr: toaddr.to_string(),
                 msg:v.subcall,
                 funds:coins(v.amount.u128(), "okt"),
             };
@@ -190,7 +191,7 @@ fn do_call_submsg(
         }
         else if v.calltype.eq("stakingmsg".clone()) {
             let msg = StakingMsg::Delegate {
-                validator:v.to,
+                validator:toaddr.to_string(),
                 amount:coin(v.amount.u128(), "okt"),
             };
             let sub_msg = SubMsg::new(msg);
@@ -198,7 +199,7 @@ fn do_call_submsg(
         }
         else if v.calltype.eq("distrmsg".clone()) {
             let msg = DistributionMsg::SetWithdrawAddress {
-                address:v.to,
+                address:toaddr.to_string(),
             };
             let sub_msg = SubMsg::new(msg);
 
@@ -219,7 +220,7 @@ fn do_call_submsg(
 
                 channel_id: "".to_string(),
 
-                to_address: v.to,
+                to_address: toaddr.to_string(),
 
                 amount: coin(v.amount.u128(), "okt"),
                 /// when packet times out, measured on remote chain
@@ -776,6 +777,7 @@ mod tests {
         use super::*;
         use crate::error::ContractError;
         use cosmwasm_std::{attr, ContractResult, CosmosMsg, from_binary};
+        use serde::__private::de::IdentifierDeserializer;
         use crate::ExecuteMsg::DoReply;
         use crate::reply::reply;
 
