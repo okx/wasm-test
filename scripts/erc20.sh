@@ -55,3 +55,5 @@ exchaincli query wasm contract-state raw "$contractAddr" 0006636F6E666967636F6E7
 echo "#### smart state"
 exchaincli query wasm contract-state smart "$contractAddr" "{\"balance\":{\"address\":\"${useraddr}\"}}"
 exchaincli query wasm contract-state smart "$contractAddr" '{"balance":{"address":"0xCf164e001d86639231d92Ab1D71DB8353E43C295"}}'
+
+echo "all case passed"
