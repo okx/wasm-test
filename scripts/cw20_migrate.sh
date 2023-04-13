@@ -1,7 +1,7 @@
 source ./localnet-prepare.sh
 
 QUERY_EXTRA="--node=$NODE"
-TX_EXTRA="--fees 0.01okt --gas 50000000 --chain-id=$CHAIN_ID --node $NODE -b block -y"
+TX_EXTRA="--fees 0.01okt --gas 30000000 --chain-id=$CHAIN_ID --node $NODE -b block -y"
 temp=$(exchaincli keys add --recover captain -m "puzzle glide follow cruel say burst deliver wild tragic galaxy lumber offer" -y)
 temp=$(exchaincli keys add --recover admin17 -m "antique onion adult slot sad dizzy sure among cement demise submit scare" -y)
 temp=$(exchaincli keys add --recover admin18 -m "lazy cause kite fence gravity regret visa fuel tone clerk motor rent" -y)

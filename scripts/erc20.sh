@@ -1,6 +1,6 @@
 source ./localnet-prepare.sh
 
-TX_EXTRA="--fees 0.01okt --gas 50000000 --chain-id=$CHAIN_ID --node $NODE -b block -y"
+TX_EXTRA="--fees 0.01okt --gas 30000000 --chain-id=$CHAIN_ID --node $NODE -b block -y"
 temp=$(exchaincli keys add --recover captain -m "puzzle glide follow cruel say burst deliver wild tragic galaxy lumber offer" -y)
 captain=$(exchaincli keys show captain | jq -r '.eth_address')
 proposal_deposit="100okt"
