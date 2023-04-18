@@ -1,0 +1,1 @@
+357358ea2f39405b366cde36bc4c0ad901535ca7866427da70a46b03b60c2af6  ./target/wasm32-unknown-unknown/release/cwokt.wasm
