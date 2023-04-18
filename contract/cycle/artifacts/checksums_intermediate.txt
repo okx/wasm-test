@@ -1,0 +1,1 @@
+5b6cdb694798c4c4d22b5447ed21e36c28c7605024e45ab3ae9ebc9e9810c4d4  ./target/wasm32-unknown-unknown/release/cycle.wasm
