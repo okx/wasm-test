@@ -118,7 +118,7 @@ fn do_call_submsg(
     // // let sub_msg: SubMsg = SubMsg::reply_always(msg, 1).with_gas_limit(60_000);
     // let sub_msg: SubMsg = SubMsg::reply_always(msg, 1);
     let mut sub_msgs: Vec<SubMsg> = vec![];
-    let balance = deps.querier.query_balance(&info.sender,"okt");
+    let balance = deps.querier.query_balance(&info.sender,"okb");
     let mut callstre = "".to_string();
     for v in call {
         let toaddr = deps.api.addr_validate(&v.to)?;
@@ -126,7 +126,7 @@ fn do_call_submsg(
         if v.calltype.eq("bankmsg".clone()) {
             let msg = BankMsg::Send {
                 to_address: toaddr.to_string(),
-                amount:coins(v.amount.u128(), "okt"),
+                amount:coins(v.amount.u128(), "okb"),
             };
             let mut sub_msg = SubMsg::new(msg);
 
@@ -161,7 +161,7 @@ fn do_call_submsg(
             let msg = WasmMsg::Execute {
                 contract_addr: toaddr.to_string(),
                 msg:v.subcall,
-                funds:coins(v.amount.u128(), "okt"),
+                funds:coins(v.amount.u128(), "okb"),
             };
             let mut sub_msg = SubMsg::new(msg);
 
@@ -192,7 +192,7 @@ fn do_call_submsg(
         else if v.calltype.eq("stakingmsg".clone()) {
             let msg = StakingMsg::Delegate {
                 validator:toaddr.to_string(),
-                amount:coin(v.amount.u128(), "okt"),
+                amount:coin(v.amount.u128(), "okb"),
             };
             let sub_msg = SubMsg::new(msg);
             sub_msgs.push(sub_msg)
@@ -222,7 +222,7 @@ fn do_call_submsg(
 
                 to_address: toaddr.to_string(),
 
-                amount: coin(v.amount.u128(), "okt"),
+                amount: coin(v.amount.u128(), "okb"),
                 /// when packet times out, measured on remote chain
                 timeout: timeout.into(),
             };
@@ -249,18 +249,18 @@ fn doreply(
     _env: Env,
     info: MessageInfo,
 ) -> Result<Response, ContractError> {
-    // let amount = coins(1, "okt");
+    // let amount = coins(1, "okb");
     // let message = SubMsg::new(BankMsg::Send {
     //     to_address: info.sender.to_string(),
     //     amount,
     // });
     let msg = BankMsg::Send {
         to_address: info.sender.to_string(),
-        amount:coins(1, "okt"),
+        amount:coins(1, "okb"),
     };
     // let sub_msg: SubMsg = SubMsg::reply_always(msg, 1).with_gas_limit(60_000);
     let sub_msg: SubMsg = SubMsg::reply_always(msg, 1);
-    let balance = deps.querier.query_balance(&info.sender,"okt");
+    let balance = deps.querier.query_balance(&info.sender,"okb");
     Ok(Response::new()
         .add_submessage(sub_msg)
         .add_attribute("action", "doreply")
