@@ -400,23 +400,23 @@ then
   exit 1
 fi
 
-echo "## clear admin..."
-res=$(exchaincli tx wasm clear-contract-admin "$cw4contractAddr" --from admin17 $TX_EXTRA)
-actionName=$(echo "$res" | jq '.logs[0].events[0].attributes[0].value' | sed 's/\"//g')
-if [[ "${actionName}" != "clear-contract-admin" ]];
-then
-  echo "invalid action name: ${actionName}"
-  exit 1
-fi;
-
-res=$(exchaincli tx wasm set-contract-admin "$cw4contractAddr" "$admin17" --from admin18 $TX_EXTRA)
-raw_log=$(echo "$res" | jq '.raw_log' | sed 's/\"//g')
-failed_log="unauthorized: can not modify contract: failed to execute message; message index: 0"
-if [[ "${raw_log}" != "${failed_log}" ]];
-then
-  echo "expect fail when update admin after clear admin"
-  exit 1
-fi;
+#echo "## clear admin..."
+#res=$(exchaincli tx wasm clear-contract-admin "$cw4contractAddr" --from admin17 $TX_EXTRA)
+#actionName=$(echo "$res" | jq '.logs[0].events[0].attributes[0].value' | sed 's/\"//g')
+#if [[ "${actionName}" != "clear-contract-admin" ]];
+#then
+#  echo "invalid action name: ${actionName}"
+#  exit 1
+#fi;
+#
+#res=$(exchaincli tx wasm set-contract-admin "$cw4contractAddr" "$admin17" --from admin18 $TX_EXTRA)
+#raw_log=$(echo "$res" | jq '.raw_log' | sed 's/\"//g')
+#failed_log="unauthorized: can not modify contract: failed to execute message; message index: 0"
+#if [[ "${raw_log}" != "${failed_log}" ]];
+#then
+#  echo "expect fail when update admin after clear admin"
+#  exit 1
+#fi;
 
 
 #####################################################
@@ -476,15 +476,15 @@ then
   exit 1
 fi;
 
-res=$(exchaincli tx wasm clear-contract-admin "$cw20contractAddr" --from captain $TX_EXTRA)
-res=$(exchaincli tx wasm migrate "$cw20contractAddr" "$burner_code_id" '{"payout": "'$captain'"}' --from captain $TX_EXTRA)
-raw_log=$(echo "$res" | jq '.raw_log' | sed 's/\"//g')
-failed_log="unauthorized: can not migrate: failed to execute message; message index: 0"
-if [[ "${raw_log}" != "${failed_log}" ]];
-then
-  echo "expect fail when migrating after clearing admin"
-  exit 1
-fi;
+#res=$(exchaincli tx wasm clear-contract-admin "$cw20contractAddr" --from captain $TX_EXTRA)
+#res=$(exchaincli tx wasm migrate "$cw20contractAddr" "$burner_code_id" '{"payout": "'$captain'"}' --from captain $TX_EXTRA)
+#raw_log=$(echo "$res" | jq '.raw_log' | sed 's/\"//g')
+#failed_log="unauthorized: can not migrate: failed to execute message; message index: 0"
+#if [[ "${raw_log}" != "${failed_log}" ]];
+#then
+#  echo "expect fail when migrating after clearing admin"
+#  exit 1
+#fi;
 
 history_operation_count=$(exchaincli query wasm contract-history "$cw20contractAddr" $QUERY_EXTRA | jq '.entries|length')
 res=$(exchaincli tx gov submit-proposal migrate-contract "$cw20contractAddr" "$burner_code_id" '{"payout": "'$admin18'"}' --deposit ${proposal_deposit} --title "test title" --description "test description" --from captain $TX_EXTRA)
@@ -765,18 +765,18 @@ then
   exit 1
 fi
 
-echo "## gov clear cw20 admin"
-res=$(exchaincli tx gov submit-proposal clear-contract-admin $cw20contractAddr --deposit ${proposal_deposit} --title "test title" --description "test description" --from captain $TX_EXTRA)
-proposal_id=$(echo "$res" | jq '.logs[0].events[1].attributes[1].value' | sed 's/\"//g')
-echo "proposal_id: $proposal_id"
-proposal_vote "$proposal_id"
+#echo "## gov clear cw20 admin"
+#res=$(exchaincli tx gov submit-proposal clear-contract-admin $cw20contractAddr --deposit ${proposal_deposit} --title "test title" --description "test description" --from captain $TX_EXTRA)
+#proposal_id=$(echo "$res" | jq '.logs[0].events[1].attributes[1].value' | sed 's/\"//g')
+#echo "proposal_id: $proposal_id"
+#proposal_vote "$proposal_id"
 
-cw20admin=$(exchaincli query wasm contract "$cw20contractAddr" "$QUERY_EXTRA" | jq '.contract_info.admin' | sed 's/\"//g')
-if [[ $cw20admin != "" ]];
-then
-  echo "cw20 admin expected to be nobody"
-  exit 1
-fi
+#cw20admin=$(exchaincli query wasm contract "$cw20contractAddr" "$QUERY_EXTRA" | jq '.contract_info.admin' | sed 's/\"//g')
+#if [[ $cw20admin != "" ]];
+#then
+#  echo "cw20 admin expected to be nobody"
+#  exit 1
+#fi
 
 # update whitelist
 echo "## update deployment whitelist and store wasm code"

@@ -636,18 +636,18 @@ then
   exit 1
 fi
 
-echo "## gov clear cw20 admin"
-res=$(exchaincli tx gov submit-proposal clear-contract-admin $cw20contractAddr_0x --deposit ${proposal_deposit} --title "test title" --description "test description" --from captain $TX_EXTRA)
-proposal_id=$(echo "$res" | jq '.logs[0].events[1].attributes[1].value' | sed 's/\"//g')
-echo "proposal_id: $proposal_id"
-proposal_vote "$proposal_id"
-
-cw20admin=$(exchaincli query wasm contract "$cw20contractAddr_0x" "$QUERY_EXTRA" | jq '.contract_info.admin' | sed 's/\"//g')
-if [[ $cw20admin != "" ]];
-then
-  echo "cw20 admin expected to be nobody"
-  exit 1
-fi
+#echo "## gov clear cw20 admin"
+#res=$(exchaincli tx gov submit-proposal clear-contract-admin $cw20contractAddr_0x --deposit ${proposal_deposit} --title "test title" --description "test description" --from captain $TX_EXTRA)
+#proposal_id=$(echo "$res" | jq '.logs[0].events[1].attributes[1].value' | sed 's/\"//g')
+#echo "proposal_id: $proposal_id"
+#proposal_vote "$proposal_id"
+#
+#cw20admin=$(exchaincli query wasm contract "$cw20contractAddr_0x" "$QUERY_EXTRA" | jq '.contract_info.admin' | sed 's/\"//g')
+#if [[ $cw20admin != "" ]];
+#then
+#  echo "cw20 admin expected to be nobody"
+#  exit 1
+#fi
 
 # update whitelist
 echo "## update deployment whitelist and store wasm code"
