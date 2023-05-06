@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ExecuteMsg",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "add"
+      ],
+      "properties": {
+        "add": {
+          "type": "object",
+          "required": [
+            "spender"
+          ],
+          "properties": {
+            "spender": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  ]
+}
