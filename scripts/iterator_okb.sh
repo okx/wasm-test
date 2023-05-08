@@ -109,6 +109,19 @@ temp=$(okbchaincli keys add --recover captain -m "puzzle glide follow cruel say 
 
 res=$(okbchaincli tx send captain $(okbchaincli keys show user -a) 1okb --fees 0.001okb -y -b block)
 
+# usage:
+#   proposal_vote {proposal_id}
+proposal_vote() {
+  ./vote_okb.sh $1 $CHAIN_ID
+}
+
+echo "## update wasm code deployment whitelist"
+res=$(okbchaincli tx gov submit-proposal update-wasm-deployment-whitelist "all" --deposit ${proposal_deposit} --title "test title" --description "test description" --from captain $TX_EXTRA)
+echo $res
+proposal_id=$(echo "$res" | jq '.logs[0].events[1].attributes[1].value' | sed 's/\"//g')
+echo "proposal_id: $proposal_id"
+proposal_vote "$proposal_id"
+
 for (( i=0; i<20; i++ ))
 do
     test_case $i
