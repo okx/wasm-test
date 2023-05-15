@@ -33,6 +33,10 @@ function localnetvote4v() {
   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from val3 --chain-id=$2 $NODE_FLAGS
 }
 
+function devnetvote(){
+	echo "devnet vote start"
+}
+
 if [ -n "$3" ]
 then
   NODE_FLAGS="--node=$3"
@@ -51,11 +55,14 @@ case "$2" in
     exit 1
     ;;
   okbchain-67)
-	 vcount=$(okbchaincli query staking validators | grep "moniker" | wc -l | sed 's/ //g')
+	 vcount=$(okbchaincli query staking validators $NODE_FLAGS | grep "moniker" | wc -l | sed 's/ //g')
 	 if [[ $vcount == 4 ]];
 	 then
 	 	 localnetvote4v $1 $2
-	 else
+	 elif [[ $vcount == 21 ]];
+	 then
+	 	 devnetvote $1 $2
+    else
     	 localnetvote $1 $2
     fi
     ;;
