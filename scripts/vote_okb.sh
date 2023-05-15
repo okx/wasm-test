@@ -34,7 +34,28 @@ function localnetvote4v() {
 }
 
 function devnetvote(){
-	echo "devnet vote start"
+   echo "devnet vote start"
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val0 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val1 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val2 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val3 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val4 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val5 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val6 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val7 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val8 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val9 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val10 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val11 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val12 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val13 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val14 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val15 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val16 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val17 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val18 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val19 --chain-id=$2 $NODE_FLAGS
+   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val20 --chain-id=$2 $NODE_FLAGS
 }
 
 if [ -n "$3" ]
