@@ -1,4 +1,5 @@
 set -e
+set -x
 source ./localnet-prepare-okb.sh
 
 QUERY_EXTRA="--node=$NODE"
@@ -70,7 +71,7 @@ fi
 res=$(okbchaincli tx gov submit-proposal migrate-contract "$cw20contractAddr" "$code_id" "{}" --deposit=100okb --title "migration" --description "migrate cw20_base" --from captain $TX_EXTRA)
 proposal_id=$(echo "$res" | jq '.logs[0].events[1].attributes[1].value' | sed 's/\"//g')
 echo "proposal_id: $proposal_id"
-res=$(okbchaincli tx gov vote "$proposal_id" yes --from captain $TX_EXTRA)
+proposal_vote "$proposal_id"
 admin=$(okbchaincli query wasm contract $cw20contractAddr $QUERY_EXTRA | jq '.contract_info.admin' | sed 's/\"//g')
 if [[ $admin != "" ]]; then
   echo "unexpected admin: $admin"
@@ -91,7 +92,7 @@ fi
 res=$(okbchaincli tx gov submit-proposal update-wasm-contract-method-blocked-list "$cw20contractAddr2" "transfer" --deposit 100okb --title "blacklist" --description "block transfer method of cw20_base contract" --from captain $TX_EXTRA)
 proposal_id=$(echo "$res" | jq '.logs[0].events[1].attributes[1].value' | sed 's/\"//g')
 echo "proposal_id: $proposal_id"
-res=$(okbchaincli tx gov vote "$proposal_id" yes --from captain $TX_EXTRA)
+proposal_vote "$proposal_id"
 admin=$(okbchaincli query wasm contract $cw20contractAddr $QUERY_EXTRA | jq '.contract_info.admin' | sed 's/\"//g')
 if [[ $admin != "" ]]; then
   echo "unexpected admin: $admin"

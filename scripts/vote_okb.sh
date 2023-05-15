@@ -25,6 +25,14 @@ function localnetvote() {
   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from captain --chain-id=$2 $NODE_FLAGS
 }
 
+function localnetvote4v() {
+  echo "localnet 4v start"
+  okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from val0 --chain-id=$2 $NODE_FLAGS
+  okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from val1 --chain-id=$2 $NODE_FLAGS
+  okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from val2 --chain-id=$2 $NODE_FLAGS
+  okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from val3 --chain-id=$2 $NODE_FLAGS
+}
+
 if [ -n "$3" ]
 then
   NODE_FLAGS="--node=$3"
@@ -43,7 +51,13 @@ case "$2" in
     exit 1
     ;;
   okbchain-67)
-    localnetvote $1 $2
+	 vcount=$(okbchaincli query staking validators | grep "moniker" | wc -l | sed 's/ //g')
+	 if [[ $vcount == 4 ]];
+	 then
+	 	 localnetvote4v $1 $2
+	 else
+    	 localnetvote $1 $2
+    fi
     ;;
   *)
     echo
