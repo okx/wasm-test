@@ -1,6 +1,8 @@
 source ./localnet-prepare-okb.sh
 . ./utils.sh
 
+set +x 
+
 TX_EXTRA="--fees 0.01okb --gas 3000000 --chain-id=$CHAIN_ID --node $NODE -b block -y"
 
 temp=$(okbchaincli keys add --recover captain -m "puzzle glide follow cruel say burst deliver wild tragic galaxy lumber offer" -y)

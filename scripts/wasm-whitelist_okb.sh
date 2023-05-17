@@ -92,27 +92,28 @@ fi;
 # usage:
 #   proposal_vote {proposal_id}
 proposal_vote() {
-  if [[ $CHAIN_ID == "okbchain-67" ]];
-  then
-    res=$(okbchaincli tx gov vote "$proposal_id" yes --from captain $TX_EXTRA)
-  else
-    echo "gov voting, please wait..."
-    for ((i=0; i<${VAL_NODE_NUM}; i++))
-    do
-      if [[ ${i} -lt $((${VAL_NODE_NUM}*2/3)) ]];
-      then
-        res=$(okbchaincli tx gov vote "$1" yes --from val"$i" $TX_EXTRA_UNBLOCKED)
-      else
-        res=$(okbchaincli tx gov vote "$1" yes --from val"$i" $TX_EXTRA)
-        proposal_status=$(okbchaincli query gov proposal "$1" $QUERY_EXTRA | jq ".proposal_status" | sed 's/\"//g')
-        echo "status: $proposal_status"
-        if [[ $proposal_status == "Passed" ]];
-        then
-          break
-        fi;
-      fi;
-    done
-  fi;
+  ./vote_okb.sh $1 $CHAIN_ID
+#  if [[ $CHAIN_ID == "okbchain-67" ]];
+#  then
+#    res=$(okbchaincli tx gov vote "$proposal_id" yes --from captain $TX_EXTRA)
+#  else
+#    echo "gov voting, please wait..."
+#    for ((i=0; i<${VAL_NODE_NUM}; i++))
+#    do
+#      if [[ ${i} -lt $((${VAL_NODE_NUM}*2/3)) ]];
+#      then
+#        res=$(okbchaincli tx gov vote "$1" yes --from val"$i" $TX_EXTRA_UNBLOCKED)
+#      else
+#        res=$(okbchaincli tx gov vote "$1" yes --from val"$i" $TX_EXTRA)
+#        proposal_status=$(okbchaincli query gov proposal "$1" $QUERY_EXTRA | jq ".proposal_status" | sed 's/\"//g')
+#        echo "status: $proposal_status"
+#        if [[ $proposal_status == "Passed" ]];
+#        then
+#          break
+#        fi;
+#      fi;
+#    done
+#  fi;
 }
 
 #####################################################

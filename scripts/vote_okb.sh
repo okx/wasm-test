@@ -2,22 +2,24 @@
 
 NODE_FLAGS=""
 
+
 function testnetvote() {
-    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testval00 --chain-id=$2 $NODE_FLAGS
-    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testval01-1 --chain-id=$2 $NODE_FLAGS
-    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testval02-4 --chain-id=$2 $NODE_FLAGS
-    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testval03-5 --chain-id=$2 $NODE_FLAGS
-    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testval04-5 --chain-id=$2 $NODE_FLAGS
-    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testval05-4 --chain-id=$2 $NODE_FLAGS
-    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testval06-3 --chain-id=$2 $NODE_FLAGS
-    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testval07 --chain-id=$2 $NODE_FLAGS
-    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testval08-4 --chain-id=$2 $NODE_FLAGS
-    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testval09-5 --chain-id=$2 $NODE_FLAGS
-    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testval10 --chain-id=$2 $NODE_FLAGS
-    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testval11-4 --chain-id=$2 $NODE_FLAGS
-    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testval12-3 --chain-id=$2 $NODE_FLAGS
-    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testval13-5 --chain-id=$2 $NODE_FLAGS
-    okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from testval14-3 --chain-id=$2 $NODE_FLAGS
+#    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testnet-val0 --chain-id=$2 $NODE_FLAGS
+    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testnet-val1 --chain-id=$2 $NODE_FLAGS
+    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testnet-val2 --chain-id=$2 $NODE_FLAGS
+    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testnet-val3 --chain-id=$2 $NODE_FLAGS
+    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testnet-val4 --chain-id=$2 $NODE_FLAGS
+    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testnet-val5 --chain-id=$2 $NODE_FLAGS
+    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testnet-val6 --chain-id=$2 $NODE_FLAGS
+    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testnet-val7 --chain-id=$2 $NODE_FLAGS
+    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testnet-val8 --chain-id=$2 $NODE_FLAGS
+    okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from testnet-val9 --chain-id=$2 $NODE_FLAGS
+#    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testnet-val10 --chain-id=$2 $NODE_FLAGS
+#    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testnet-val11 --chain-id=$2 $NODE_FLAGS
+#    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testnet-val12 --chain-id=$2 $NODE_FLAGS
+#    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testnet-val0 --chain-id=$2 $NODE_FLAGS
+#    okbchaincli tx gov vote $1 yes -y -b sync --fees 0.004okb --gas 2000000 --from testnet-val0 --chain-id=$2 $NODE_FLAGS
+#    okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from testval14-3 --chain-id=$2 $NODE_FLAGS
 }
 
 function localnetvote() {
@@ -50,12 +52,12 @@ function devnetvote(){
    okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val12 --chain-id=$2 $NODE_FLAGS
    okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val13 --chain-id=$2 $NODE_FLAGS
    okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val14 --chain-id=$2 $NODE_FLAGS
-   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val15 --chain-id=$2 $NODE_FLAGS
-   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val16 --chain-id=$2 $NODE_FLAGS
-   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val17 --chain-id=$2 $NODE_FLAGS
-   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val18 --chain-id=$2 $NODE_FLAGS
-   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val19 --chain-id=$2 $NODE_FLAGS
-   okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val20 --chain-id=$2 $NODE_FLAGS
+  # okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val15 --chain-id=$2 $NODE_FLAGS
+  # okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val16 --chain-id=$2 $NODE_FLAGS
+  # okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val17 --chain-id=$2 $NODE_FLAGS
+  # okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val18 --chain-id=$2 $NODE_FLAGS
+  # okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val19 --chain-id=$2 $NODE_FLAGS
+  # okbchaincli tx gov vote $1 yes -y -b block --fees 0.004okb --gas 2000000 --from devnet_val20 --chain-id=$2 $NODE_FLAGS
 }
 
 if [ -n "$3" ]
@@ -66,6 +68,9 @@ else
 fi
 
 case "$2" in
+  okbchain-197)
+	 devnetvote $1 $2
+	 ;;
   okbchaintest-195)
     testnetvote $1 $2
     ;;
