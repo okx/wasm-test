@@ -11,7 +11,10 @@ use cw_storage_plus::Bound;
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 
+use cw_storage_plus::Item;
+
 pub const BALANCES: Map<&Addr, Uint128> = Map::new("blance");
+pub const COUNTER_VALUE: Item<i32> =Item::new("counter_value");
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
@@ -20,6 +23,9 @@ pub fn instantiate(
     _info: MessageInfo,
     _msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
+    let counter:i32 = 123;
+    COUNTER_VALUE.save(deps.storage, &counter)?; 
+
     Ok(Response::new())
 }
 
@@ -32,7 +38,8 @@ pub fn execute(
 ) -> Result<Response, ContractError> {
     match msg {
         ExecuteMsg::Add { spender } => try_add(deps,spender),
-        ExecuteMsg::Press { ascending } => try_press(deps, ascending)
+        ExecuteMsg::Press { ascending } => try_press_iter(deps, ascending),
+        ExecuteMsg::PressGet { count} => try_press_get(deps, count)
     }
 }
 
@@ -51,7 +58,7 @@ pub fn try_add(deps: DepsMut,spender:Box<[String]>) -> Result<Response, Contract
     Ok(Response::new())
 }
 
-pub fn try_press(deps: DepsMut, ascending : bool) -> Result<Response, ContractError> {
+pub fn try_press_iter(deps: DepsMut, ascending : bool) -> Result<Response, ContractError> {
     let mut order :Order = cosmwasm_std::Order::Descending;
     if ascending {
         order = cosmwasm_std::Order::Ascending;
@@ -64,8 +71,25 @@ pub fn try_press(deps: DepsMut, ascending : bool) -> Result<Response, ContractEr
     for (owner, allowance) in &data {
         i = i + 1;
     }
-    Ok(Response::new())
+
+    Ok(Response::new()
+        .add_attribute("action", "press_iter")
+        .add_attribute("count", i.to_string()))
 }
+
+pub fn try_press_get(deps: DepsMut, count: i32) -> Result<Response, ContractError> {
+    let mut number = 1;
+    while number != count {
+        number += 1;
+        let info: Option<i32> = COUNTER_VALUE.may_load(deps.storage).unwrap_or_default();
+    }
+    
+    
+    Ok(Response::new()
+        .add_attribute("action", "press_get")
+        .add_attribute("count", number.to_string()))
+}
+
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
