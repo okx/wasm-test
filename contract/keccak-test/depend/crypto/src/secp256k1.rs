@@ -73,10 +73,10 @@ pub fn keccak256_digest(
     // let sign_bytes  = hex::decode("1ff5c235b3c317d054b80b4bf0a8038bd727d180872d2491a7edef4f949c4135").to_owned();
     // let hash = Keccak256::digest(&sign_bytes.to_owned().unwrap());
 
-    // let hash = Keccak256::digest(data);
-    // Ok((&hash).to_vec())
-    let mut vec = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    Ok(vec)
+    let hash = Keccak256::digest(data);
+    Ok((&hash).to_vec())
+    // let mut vec = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    // Ok(vec)
 }
 
 /// Recovers a public key from a message hash and a signature.
