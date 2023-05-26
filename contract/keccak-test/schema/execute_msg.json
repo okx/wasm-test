@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ExecuteMsg",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "test"
+      ],
+      "properties": {
+        "test": {
+          "type": "object",
+          "required": [
+            "count",
+            "data",
+            "mode"
+          ],
+          "properties": {
+            "count": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "data": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  ]
+}
