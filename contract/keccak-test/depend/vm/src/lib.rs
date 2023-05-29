@@ -1,14 +1,16 @@
-#![cfg_attr(feature = "backtraces", feature(backtrace))]
+#![cfg_attr(feature = "backtraces", feature(error_generic_member_access))]
+#![cfg_attr(feature = "backtraces", feature(provide_any))]
 
 mod backend;
 mod cache;
 mod calls;
+mod capabilities;
 mod checksum;
 mod compatibility;
 mod conversion;
 mod environment;
 mod errors;
-mod features;
+mod filesystem;
 mod imports;
 mod instance;
 mod limited;
@@ -37,13 +39,13 @@ pub use crate::calls::{
     call_ibc_packet_ack, call_ibc_packet_ack_raw, call_ibc_packet_receive,
     call_ibc_packet_receive_raw, call_ibc_packet_timeout, call_ibc_packet_timeout_raw,
 };
+pub use crate::capabilities::capabilities_from_csv;
 pub use crate::checksum::Checksum;
 pub use crate::errors::{
     CommunicationError, CommunicationResult, RegionValidationError, RegionValidationResult,
     VmError, VmResult,
 };
-pub use crate::features::features_from_csv;
-pub use crate::instance::{GasReport, Instance, InstanceOptions};
+pub use crate::instance::{DebugInfo, GasReport, Instance, InstanceOptions};
 pub use crate::serde::{from_slice, to_vec};
 pub use crate::size::Size;
 

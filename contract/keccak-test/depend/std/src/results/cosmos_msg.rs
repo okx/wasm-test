@@ -1,13 +1,16 @@
+use derivative::Derivative;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::binary::Binary;
-use crate::coins::Coin;
+use crate::coin::Coin;
 use crate::errors::StdResult;
 #[cfg(feature = "stargate")]
 use crate::ibc::IbcMsg;
 use crate::serde::to_binary;
+#[cfg(all(feature = "stargate", feature = "cosmwasm_1_2"))]
+use crate::Decimal;
 
 use super::Empty;
 
@@ -18,7 +21,7 @@ pub trait CustomMsg: Serialize + Clone + fmt::Debug + PartialEq + JsonSchema {}
 impl CustomMsg for Empty {}
 
 #[non_exhaustive]
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 // See https://github.com/serde-rs/serde/issues/1296 why we cannot add De-Serialize trait bounds to T
 pub enum CosmosMsg<T = Empty> {
@@ -48,7 +51,7 @@ pub enum CosmosMsg<T = Empty> {
 ///
 /// See https://github.com/cosmos/cosmos-sdk/blob/v0.40.0/proto/cosmos/bank/v1beta1/tx.proto
 #[non_exhaustive]
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BankMsg {
     /// Sends native tokens from the contract to the given address.
@@ -70,7 +73,7 @@ pub enum BankMsg {
 /// See https://github.com/cosmos/cosmos-sdk/blob/v0.40.0/proto/cosmos/staking/v1beta1/tx.proto
 #[cfg(feature = "staking")]
 #[non_exhaustive]
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StakingMsg {
     /// This is translated to a [MsgDelegate](https://github.com/cosmos/cosmos-sdk/blob/v0.40.0/proto/cosmos/staking/v1beta1/tx.proto#L81-L90).
@@ -93,7 +96,7 @@ pub enum StakingMsg {
 /// See https://github.com/cosmos/cosmos-sdk/blob/v0.42.4/proto/cosmos/distribution/v1beta1/tx.proto
 #[cfg(feature = "staking")]
 #[non_exhaustive]
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DistributionMsg {
     /// This is translated to a [MsgSetWithdrawAddress](https://github.com/cosmos/cosmos-sdk/blob/v0.42.4/proto/cosmos/distribution/v1beta1/tx.proto#L29-L37).
@@ -110,11 +113,19 @@ pub enum DistributionMsg {
     },
 }
 
+fn binary_to_string(data: &Binary, fmt: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+    match std::str::from_utf8(data.as_slice()) {
+        Ok(s) => fmt.write_str(s),
+        Err(_) => write!(fmt, "{:?}", data),
+    }
+}
+
 /// The message types of the wasm module.
 ///
 /// See https://github.com/CosmWasm/wasmd/blob/v0.14.0/x/wasm/internal/types/tx.proto
 #[non_exhaustive]
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Derivative, PartialEq, Eq, JsonSchema)]
+#[derivative(Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum WasmMsg {
     /// Dispatches a call to another contract at a known address (with known ABI).
@@ -124,21 +135,47 @@ pub enum WasmMsg {
     Execute {
         contract_addr: String,
         /// msg is the json-encoded ExecuteMsg struct (as raw Binary)
+        #[derivative(Debug(format_with = "binary_to_string"))]
         msg: Binary,
         funds: Vec<Coin>,
     },
     /// Instantiates a new contracts from previously uploaded Wasm code.
     ///
-    /// This is translated to a [MsgInstantiateContract](https://github.com/CosmWasm/wasmd/blob/v0.16.0-alpha1/x/wasm/internal/types/tx.proto#L47-L61).
+    /// The contract address is non-predictable. But it is guaranteed that
+    /// when emitting the same Instantiate message multiple times,
+    /// multiple instances on different addresses will be generated. See also
+    /// Instantiate2.
+    ///
+    /// This is translated to a [MsgInstantiateContract](https://github.com/CosmWasm/wasmd/blob/v0.29.2/proto/cosmwasm/wasm/v1/tx.proto#L53-L71).
     /// `sender` is automatically filled with the current contract's address.
     Instantiate {
         admin: Option<String>,
         code_id: u64,
         /// msg is the JSON-encoded InstantiateMsg struct (as raw Binary)
+        #[derivative(Debug(format_with = "binary_to_string"))]
         msg: Binary,
         funds: Vec<Coin>,
         /// A human-readbale label for the contract
         label: String,
+    },
+    /// Instantiates a new contracts from previously uploaded Wasm code
+    /// using a predictable address derivation algorithm implemented in
+    /// [`cosmwasm_std::instantiate2_address`].
+    ///
+    /// This is translated to a [MsgInstantiateContract2](https://github.com/CosmWasm/wasmd/blob/v0.29.2/proto/cosmwasm/wasm/v1/tx.proto#L73-L96).
+    /// `sender` is automatically filled with the current contract's address.
+    /// `fix_msg` is automatically set to false.
+    #[cfg(feature = "cosmwasm_1_2")]
+    Instantiate2 {
+        admin: Option<String>,
+        code_id: u64,
+        /// A human-readbale label for the contract
+        label: String,
+        /// msg is the JSON-encoded InstantiateMsg struct (as raw Binary)
+        #[derivative(Debug(format_with = "binary_to_string"))]
+        msg: Binary,
+        funds: Vec<Coin>,
+        salt: Binary,
     },
     /// Migrates a given contracts to use new wasm code. Passes a MigrateMsg to allow us to
     /// customize behavior.
@@ -152,6 +189,7 @@ pub enum WasmMsg {
         /// the code_id of the new logic to place in the given contract
         new_code_id: u64,
         /// msg is the json-encoded MigrateMsg struct that will be passed to the new code
+        #[derivative(Debug(format_with = "binary_to_string"))]
         msg: Binary,
     },
     /// Sets a new admin (for migrate) on the given contract.
@@ -165,22 +203,111 @@ pub enum WasmMsg {
     ClearAdmin { contract_addr: String },
 }
 
+/// This message type allows the contract interact with the [x/gov] module in order
+/// to cast votes.
+///
+/// [x/gov]: https://github.com/cosmos/cosmos-sdk/tree/v0.45.12/x/gov
+///
+/// ## Examples
+///
+/// Cast a simple vote:
+///
+/// ```
+/// # use cosmwasm_std::{
+/// #     HexBinary,
+/// #     Storage, Api, Querier, DepsMut, Deps, entry_point, Env, StdError, MessageInfo,
+/// #     Response, QueryResponse,
+/// # };
+/// # type ExecuteMsg = ();
+/// use cosmwasm_std::{GovMsg, VoteOption};
+///
+/// #[entry_point]
+/// pub fn execute(
+///     deps: DepsMut,
+///     env: Env,
+///     info: MessageInfo,
+///     msg: ExecuteMsg,
+/// ) -> Result<Response, StdError> {
+///     // ...
+///     Ok(Response::new().add_message(GovMsg::Vote {
+///         proposal_id: 4,
+///         vote: VoteOption::Yes,
+///     }))
+/// }
+/// ```
+///
+/// Cast a weighted vote:
+///
+/// ```
+/// # use cosmwasm_std::{
+/// #     HexBinary,
+/// #     Storage, Api, Querier, DepsMut, Deps, entry_point, Env, StdError, MessageInfo,
+/// #     Response, QueryResponse,
+/// # };
+/// # type ExecuteMsg = ();
+/// # #[cfg(feature = "cosmwasm_1_2")]
+/// use cosmwasm_std::{Decimal, GovMsg, VoteOption, WeightedVoteOption};
+///
+/// # #[cfg(feature = "cosmwasm_1_2")]
+/// #[entry_point]
+/// pub fn execute(
+///     deps: DepsMut,
+///     env: Env,
+///     info: MessageInfo,
+///     msg: ExecuteMsg,
+/// ) -> Result<Response, StdError> {
+///     // ...
+///     Ok(Response::new().add_message(GovMsg::VoteWeighted {
+///         proposal_id: 4,
+///         options: vec![
+///             WeightedVoteOption {
+///                 option: VoteOption::Yes,
+///                 weight: Decimal::percent(65),
+///             },
+///             WeightedVoteOption {
+///                 option: VoteOption::Abstain,
+///                 weight: Decimal::percent(35),
+///             },
+///         ],
+///     }))
+/// }
+/// ```
 #[cfg(feature = "stargate")]
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GovMsg {
     /// This maps directly to [MsgVote](https://github.com/cosmos/cosmos-sdk/blob/v0.42.5/proto/cosmos/gov/v1beta1/tx.proto#L46-L56) in the Cosmos SDK with voter set to the contract address.
-    Vote { proposal_id: u64, vote: VoteOption },
+    Vote {
+        proposal_id: u64,
+        /// The vote option.
+        ///
+        /// This should be called "option" for consistency with Cosmos SDK. Sorry for that.
+        /// See <https://github.com/CosmWasm/cosmwasm/issues/1571>.
+        vote: VoteOption,
+    },
+    /// This maps directly to [MsgVoteWeighted](https://github.com/cosmos/cosmos-sdk/blob/v0.45.8/proto/cosmos/gov/v1beta1/tx.proto#L66-L78) in the Cosmos SDK with voter set to the contract address.
+    #[cfg(feature = "cosmwasm_1_2")]
+    VoteWeighted {
+        proposal_id: u64,
+        options: Vec<WeightedVoteOption>,
+    },
 }
 
 #[cfg(feature = "stargate")]
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VoteOption {
     Yes,
     No,
     Abstain,
     NoWithVeto,
+}
+
+#[cfg(all(feature = "stargate", feature = "cosmwasm_1_2"))]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
+pub struct WeightedVoteOption {
+    pub option: VoteOption,
+    pub weight: Decimal,
 }
 
 /// Shortcut helper as the construction of WasmMsg::Instantiate can be quite verbose in contract code.
@@ -259,7 +386,7 @@ impl<T> From<GovMsg> for CosmosMsg<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coins;
+    use crate::{coin, coins};
 
     #[test]
     fn from_bank_msg_works() {
@@ -270,6 +397,148 @@ mod tests {
         match msg {
             CosmosMsg::Bank(msg) => assert_eq!(bank, msg),
             _ => panic!("must encode in Bank variant"),
+        }
+    }
+
+    #[test]
+    fn wasm_msg_serializes_to_correct_json() {
+        // Instantiate with admin
+        let msg = WasmMsg::Instantiate {
+            admin: Some("king".to_string()),
+            code_id: 7897,
+            msg: br#"{"claim":{}}"#.into(),
+            funds: vec![],
+            label: "my instance".to_string(),
+        };
+        let json = to_binary(&msg).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&json),
+            r#"{"instantiate":{"admin":"king","code_id":7897,"msg":"eyJjbGFpbSI6e319","funds":[],"label":"my instance"}}"#,
+        );
+
+        // Instantiate without admin
+        let msg = WasmMsg::Instantiate {
+            admin: None,
+            code_id: 7897,
+            msg: br#"{"claim":{}}"#.into(),
+            funds: vec![],
+            label: "my instance".to_string(),
+        };
+        let json = to_binary(&msg).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&json),
+            r#"{"instantiate":{"admin":null,"code_id":7897,"msg":"eyJjbGFpbSI6e319","funds":[],"label":"my instance"}}"#,
+        );
+
+        // Instantiate with funds
+        let msg = WasmMsg::Instantiate {
+            admin: None,
+            code_id: 7897,
+            msg: br#"{"claim":{}}"#.into(),
+            funds: vec![coin(321, "stones")],
+            label: "my instance".to_string(),
+        };
+        let json = to_binary(&msg).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&json),
+            r#"{"instantiate":{"admin":null,"code_id":7897,"msg":"eyJjbGFpbSI6e319","funds":[{"denom":"stones","amount":"321"}],"label":"my instance"}}"#,
+        );
+
+        // Instantiate2
+        #[cfg(feature = "cosmwasm_1_2")]
+        {
+            let msg = WasmMsg::Instantiate2 {
+                admin: None,
+                code_id: 7897,
+                label: "my instance".to_string(),
+                msg: br#"{"claim":{}}"#.into(),
+                funds: vec![coin(321, "stones")],
+                salt: Binary::from_base64("UkOVazhiwoo=").unwrap(),
+            };
+            let json = to_binary(&msg).unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&json),
+                r#"{"instantiate2":{"admin":null,"code_id":7897,"label":"my instance","msg":"eyJjbGFpbSI6e319","funds":[{"denom":"stones","amount":"321"}],"salt":"UkOVazhiwoo="}}"#,
+            );
+        }
+    }
+
+    #[test]
+    fn wasm_msg_debug_decodes_binary_string_when_possible() {
+        #[cosmwasm_schema::cw_serde]
+        enum ExecuteMsg {
+            Mint { coin: Coin },
+        }
+
+        let msg = WasmMsg::Execute {
+            contract_addr: "joe".to_string(),
+            msg: to_binary(&ExecuteMsg::Mint {
+                coin: coin(10, "BTC"),
+            })
+            .unwrap(),
+            funds: vec![],
+        };
+
+        assert_eq!(
+            format!("{:?}", msg),
+            "Execute { contract_addr: \"joe\", msg: {\"mint\":{\"coin\":{\"denom\":\"BTC\",\"amount\":\"10\"}}}, funds: [] }"
+        );
+    }
+
+    #[test]
+    fn wasm_msg_debug_dumps_binary_when_not_utf8() {
+        let msg = WasmMsg::Execute {
+            contract_addr: "joe".to_string(),
+            msg: Binary::from([0, 159, 146, 150]),
+            funds: vec![],
+        };
+
+        assert_eq!(
+            format!("{:?}", msg),
+            "Execute { contract_addr: \"joe\", msg: Binary(009f9296), funds: [] }"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "stargate")]
+    fn gov_msg_serializes_to_correct_json() {
+        // Vote
+        let msg = GovMsg::Vote {
+            proposal_id: 4,
+            vote: VoteOption::NoWithVeto,
+        };
+        let json = to_binary(&msg).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&json),
+            r#"{"vote":{"proposal_id":4,"vote":"no_with_veto"}}"#,
+        );
+
+        // VoteWeighted
+        #[cfg(feature = "cosmwasm_1_2")]
+        {
+            let msg = GovMsg::VoteWeighted {
+                proposal_id: 25,
+                options: vec![
+                    WeightedVoteOption {
+                        weight: Decimal::percent(25),
+                        option: VoteOption::Yes,
+                    },
+                    WeightedVoteOption {
+                        weight: Decimal::percent(25),
+                        option: VoteOption::No,
+                    },
+                    WeightedVoteOption {
+                        weight: Decimal::percent(50),
+                        option: VoteOption::Abstain,
+                    },
+                ],
+            };
+
+            let json = to_binary(&msg).unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&json),
+                r#"{"vote_weighted":{"proposal_id":25,"options":[{"option":"yes","weight":"0.25"},{"option":"no","weight":"0.25"},{"option":"abstain","weight":"0.5"}]}}"#,
+            );
         }
     }
 }

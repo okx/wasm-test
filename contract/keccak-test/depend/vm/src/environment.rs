@@ -1,13 +1,23 @@
 //! Internal details to be used by instance.rs only
 use std::borrow::{Borrow, BorrowMut};
+use std::marker::PhantomData;
 use std::ptr::NonNull;
+use std::rc::Rc;
 use std::sync::{Arc, RwLock};
 
+use derivative::Derivative;
 use wasmer::{HostEnvInitError, Instance as WasmerInstance, Memory, Val, WasmerEnv};
 use wasmer_middlewares::metering::{get_remaining_points, set_remaining_points, MeteringPoints};
 
 use crate::backend::{BackendApi, GasInfo, Querier, Storage};
 use crate::errors::{VmError, VmResult};
+
+/// Keep this as low as necessary to avoid deepy nested errors like this:
+///
+/// ```plain
+/// RuntimeErr { msg: "Wasmer runtime error: RuntimeError: Error executing Wasm: Wasmer runtime error: RuntimeError: Error executing Wasm: Wasmer runtime error: RuntimeError: Error executing Wasm: Wasmer runtime error: RuntimeError: Error executing Wasm: Wasmer runtime error: RuntimeError: Maximum call depth exceeded." }
+/// ```
+const MAX_CALL_DEPTH: usize = 2;
 
 /// Never can never be instantiated.
 /// Replace this with the [never primitive type](https://doc.rust-lang.org/std/primitive.never.html) when stable.
@@ -16,7 +26,7 @@ pub enum Never {}
 
 /** gas config data */
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct GasConfig {
     /// Gas costs of VM (not Backend) provided functionality
     /// secp256k1 signature verification cost
@@ -52,10 +62,12 @@ impl Default for GasConfig {
 
 /** context data **/
 
-#[derive(Clone, PartialEq, Debug, Default)]
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct GasState {
     /// Gas limit for the computation, including internally and externally used gas.
     /// This is set when the Environment is created and never mutated.
+    ///
+    /// Measured in [CosmWasm gas](https://github.com/CosmWasm/cosmwasm/blob/main/docs/GAS.md).
     pub gas_limit: u64,
     /// Tracking the gas used in the Cosmos SDK, in CosmWasm gas units.
     pub externally_used_gas: u64,
@@ -70,11 +82,34 @@ impl GasState {
     }
 }
 
+/// Additional environmental information in a debug call.
+///
+/// The currently unused lifetime parameter 'a allows accessing referenced data in the debug implementation
+/// without cloning it.
+#[derive(Derivative)]
+#[derivative(Debug)]
+#[non_exhaustive]
+pub struct DebugInfo<'a> {
+    pub gas_remaining: u64,
+    // This field is just to allow us to add the unused lifetime parameter. It can be removed
+    // at any time.
+    #[doc(hidden)]
+    #[derivative(Debug = "ignore")]
+    pub(crate) __lifetime: PhantomData<&'a ()>,
+}
+
+// Unfortunately we cannot create an alias for the trait (https://github.com/rust-lang/rust/issues/41517).
+// So we need to copy it in a few places.
+//
+//                            /- BEGIN TRAIT                   END TRAIT \
+//                            |                                          |
+//                            v                                          v
+pub type DebugHandlerFn = dyn for<'a> Fn(/* msg */ &'a str, DebugInfo<'a>);
+
 /// A environment that provides access to the ContextData.
 /// The environment is clonable but clones access the same underlying data.
 pub struct Environment<A: BackendApi, S: Storage, Q: Querier> {
     pub api: A,
-    pub print_debug: bool,
     pub gas_config: GasConfig,
     data: Arc<RwLock<ContextData<S, Q>>>,
 }
@@ -87,7 +122,6 @@ impl<A: BackendApi, S: Storage, Q: Querier> Clone for Environment<A, S, Q> {
     fn clone(&self) -> Self {
         Environment {
             api: self.api,
-            print_debug: self.print_debug,
             gas_config: self.gas_config.clone(),
             data: self.data.clone(),
         }
@@ -101,13 +135,25 @@ impl<A: BackendApi, S: Storage, Q: Querier> WasmerEnv for Environment<A, S, Q> {
 }
 
 impl<A: BackendApi, S: Storage, Q: Querier> Environment<A, S, Q> {
-    pub fn new(api: A, gas_limit: u64, print_debug: bool) -> Self {
+    pub fn new(api: A, gas_limit: u64) -> Self {
         Environment {
             api,
-            print_debug,
             gas_config: GasConfig::default(),
             data: Arc::new(RwLock::new(ContextData::new(gas_limit))),
         }
+    }
+
+    pub fn set_debug_handler(&self, debug_handler: Option<Rc<DebugHandlerFn>>) {
+        self.with_context_data_mut(|context_data| {
+            context_data.debug_handler = debug_handler;
+        })
+    }
+
+    pub fn debug_handler(&self) -> Option<Rc<DebugHandlerFn>> {
+        self.with_context_data(|context_data| {
+            // This clone here requires us to wrap the function in Rc instead of Box
+            context_data.debug_handler.clone()
+        })
     }
 
     fn with_context_data_mut<C, R>(&self, callback: C) -> R
@@ -165,7 +211,8 @@ impl<A: BackendApi, S: Storage, Q: Querier> Environment<A, S, Q> {
             let func = instance.exports.get_function(name)?;
             Ok(func.clone())
         })?;
-        func.call(args).map_err(|runtime_err| -> VmError {
+        self.increment_call_depth()?;
+        let res = func.call(args).map_err(|runtime_err| -> VmError {
             self.with_wasmer_instance::<_, Never>(|instance| {
                 let err: VmError = match get_remaining_points(instance) {
                     MeteringPoints::Remaining(_) => VmError::from(runtime_err),
@@ -174,7 +221,9 @@ impl<A: BackendApi, S: Storage, Q: Querier> Environment<A, S, Q> {
                 Err(err)
             })
             .unwrap_err() // with_wasmer_instance can only succeed if the callback succeeds
-        })
+        });
+        self.decrement_call_depth();
+        res
     }
 
     pub fn call_function0(&self, name: &str, args: &[Val]) -> VmResult<()> {
@@ -232,6 +281,31 @@ impl<A: BackendApi, S: Storage, Q: Querier> Environment<A, S, Q> {
     pub fn set_storage_readonly(&self, new_value: bool) {
         self.with_context_data_mut(|context_data| {
             context_data.storage_readonly = new_value;
+        })
+    }
+
+    /// Increments the call depth by 1 and returns the new value
+    pub fn increment_call_depth(&self) -> VmResult<usize> {
+        let new = self.with_context_data_mut(|context_data| {
+            let new = context_data.call_depth + 1;
+            context_data.call_depth = new;
+            new
+        });
+        if new > MAX_CALL_DEPTH {
+            return Err(VmError::max_call_depth_exceeded());
+        }
+        Ok(new)
+    }
+
+    /// Decrements the call depth by 1 and returns the new value
+    pub fn decrement_call_depth(&self) -> usize {
+        self.with_context_data_mut(|context_data| {
+            let new = context_data
+                .call_depth
+                .checked_sub(1)
+                .expect("Call depth < 0. This is a bug.");
+            context_data.call_depth = new;
+            new
         })
     }
 
@@ -314,7 +388,9 @@ pub struct ContextData<S: Storage, Q: Querier> {
     gas_state: GasState,
     storage: Option<S>,
     storage_readonly: bool,
+    call_depth: usize,
     querier: Option<Q>,
+    debug_handler: Option<Rc<DebugHandlerFn>>,
     /// A non-owning link to the wasmer instance
     wasmer_instance: Option<NonNull<WasmerInstance>>,
 }
@@ -325,7 +401,9 @@ impl<S: Storage, Q: Querier> ContextData<S, Q> {
             gas_state: GasState::with_limit(gas_limit),
             storage: None,
             storage_readonly: true,
+            call_depth: 0,
             querier: None,
+            debug_handler: None,
             wasmer_instance: None,
         }
     }
@@ -390,7 +468,7 @@ mod tests {
         Environment<MockApi, MockStorage, MockQuerier>,
         Box<WasmerInstance>,
     ) {
-        let env = Environment::new(MockApi::default(), gas_limit, false);
+        let env = Environment::new(MockApi::default(), gas_limit);
 
         let module = compile(CONTRACT, TESTING_MEMORY_LIMIT, &[]).unwrap();
         let store = module.store();
@@ -407,11 +485,12 @@ mod tests {
                 "addr_canonicalize" => Function::new_native(store, |_a: u32, _b: u32| -> u32 { 0 }),
                 "addr_humanize" => Function::new_native(store, |_a: u32, _b: u32| -> u32 { 0 }),
                 "secp256k1_verify" => Function::new_native(store, |_a: u32, _b: u32, _c: u32| -> u32 { 0 }),
-                "keccak256_digest" => Function::new_native(store, |_a: u32 | -> u64 { 0 }),
                 "secp256k1_recover_pubkey" => Function::new_native(store, |_a: u32, _b: u32, _c: u32| -> u64 { 0 }),
                 "ed25519_verify" => Function::new_native(store, |_a: u32, _b: u32, _c: u32| -> u32 { 0 }),
                 "ed25519_batch_verify" => Function::new_native(store, |_a: u32, _b: u32, _c: u32| -> u32 { 0 }),
+                "keccak256_digest" => Function::new_native(store, |_a: u32 | -> u64 { 0 }),
                 "debug" => Function::new_native(store, |_a: u32| {}),
+                "abort" => Function::new_native(store, |_a: u32| {}),
             },
         };
         let instance = Box::from(WasmerInstance::new(&module, &import_obj).unwrap());

@@ -9,10 +9,10 @@ use std::ops::{
 use std::str::FromStr;
 
 use crate::errors::{
-    CheckedMultiplyRatioError, ConversionOverflowError, DivideByZeroError, OverflowError,
-    OverflowOperation, StdError,
+    CheckedMultiplyFractionError, CheckedMultiplyRatioError, ConversionOverflowError,
+    DivideByZeroError, OverflowError, OverflowOperation, StdError,
 };
-use crate::{Uint128, Uint512, Uint64};
+use crate::{forward_ref_partial_eq, impl_mul_fraction, Fraction, Uint128, Uint512, Uint64};
 
 /// This module is purely a workaround that lets us ignore lints for all the code
 /// the `construct_uint!` macro generates.
@@ -50,8 +50,11 @@ use uints::U256;
 #[derive(Copy, Clone, Default, Debug, PartialEq, Eq, PartialOrd, Ord, JsonSchema)]
 pub struct Uint256(#[schemars(with = "String")] U256);
 
+forward_ref_partial_eq!(Uint256, Uint256);
+
 impl Uint256 {
     pub const MAX: Uint256 = Uint256(U256::MAX);
+    pub const MIN: Uint256 = Uint256(U256::zero());
 
     /// Creates a Uint256(value) from a big endian representation. It's just an alias for
     /// [`Uint256::from_be_bytes`].
@@ -62,10 +65,21 @@ impl Uint256 {
     }
 
     /// Creates a Uint256(0)
+    #[inline]
     pub const fn zero() -> Self {
         Uint256(U256::zero())
     }
 
+    /// Creates a Uint256(1)
+    #[inline]
+    pub const fn one() -> Self {
+        Self::from_be_bytes([
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 1,
+        ])
+    }
+
+    #[must_use]
     pub const fn from_be_bytes(data: [u8; 32]) -> Self {
         let words: [u64; 4] = [
             u64::from_le_bytes([
@@ -84,6 +98,7 @@ impl Uint256 {
         Self(U256(words))
     }
 
+    #[must_use]
     pub const fn from_le_bytes(data: [u8; 32]) -> Self {
         let words: [u64; 4] = [
             u64::from_le_bytes([
@@ -104,6 +119,7 @@ impl Uint256 {
 
     /// A conversion from `u128` that, unlike the one provided by the `From` trait,
     /// can be used in a `const` context.
+    #[must_use]
     pub const fn from_u128(num: u128) -> Self {
         let bytes = num.to_le_bytes();
 
@@ -116,11 +132,13 @@ impl Uint256 {
 
     /// A conversion from `Uint128` that, unlike the one provided by the `From` trait,
     /// can be used in a `const` context.
+    #[must_use]
     pub const fn from_uint128(num: Uint128) -> Self {
         Self::from_u128(num.u128())
     }
 
     /// Returns a copy of the number as big endian bytes.
+    #[must_use = "this returns the result of the operation, without modifying the original"]
     pub const fn to_be_bytes(self) -> [u8; 32] {
         let words = [
             (self.0).0[3].to_be_bytes(),
@@ -132,6 +150,7 @@ impl Uint256 {
     }
 
     /// Returns a copy of the number as little endian bytes.
+    #[must_use = "this returns the result of the operation, without modifying the original"]
     pub const fn to_le_bytes(self) -> [u8; 32] {
         let words = [
             (self.0).0[0].to_le_bytes(),
@@ -142,17 +161,23 @@ impl Uint256 {
         unsafe { std::mem::transmute::<[[u8; 8]; 4], [u8; 32]>(words) }
     }
 
+    #[must_use]
     pub const fn is_zero(&self) -> bool {
         let words = (self.0).0;
         words[0] == 0 && words[1] == 0 && words[2] == 0 && words[3] == 0
     }
 
+    #[must_use = "this returns the result of the operation, without modifying the original"]
     pub fn pow(self, exp: u32) -> Self {
         let res = self.0.pow(exp.into());
         Self(res)
     }
 
-    /// Returns `self * numerator / denominator`
+    /// Returns `self * numerator / denominator`.
+    ///
+    /// Due to the nature of the integer division involved, the result is always floored.
+    /// E.g. 5 * 99/100 = 4.
+    #[must_use = "this returns the result of the operation, without modifying the original"]
     pub fn multiply_ratio<A: Into<Uint256>, B: Into<Uint256>>(
         &self,
         numerator: A,
@@ -167,7 +192,10 @@ impl Uint256 {
         }
     }
 
-    /// Returns `self * numerator / denominator`
+    /// Returns `self * numerator / denominator`.
+    ///
+    /// Due to the nature of the integer division involved, the result is always floored.
+    /// E.g. 5 * 99/100 = 4.
     pub fn checked_multiply_ratio<A: Into<Uint256>, B: Into<Uint256>>(
         &self,
         numerator: A,
@@ -199,6 +227,7 @@ impl Uint256 {
     ///     "231584178474632390847141970017375815706539969331281128078915168015826259279870",
     /// );
     /// ```
+    #[must_use = "this returns the result of the operation, without modifying the original"]
     pub fn full_mul(self, rhs: impl Into<Uint256>) -> Uint512 {
         Uint512::from(self)
             .checked_mul(Uint512::from(rhs.into()))
@@ -240,6 +269,10 @@ impl Uint256 {
             .ok_or_else(|| DivideByZeroError::new(self))
     }
 
+    pub fn checked_div_euclid(self, other: Self) -> Result<Self, DivideByZeroError> {
+        self.checked_div(other)
+    }
+
     pub fn checked_rem(self, other: Self) -> Result<Self, DivideByZeroError> {
         self.0
             .checked_rem(other.0)
@@ -263,18 +296,68 @@ impl Uint256 {
         Ok(Self(self.0.shl(other)))
     }
 
+    #[must_use = "this returns the result of the operation, without modifying the original"]
+    #[inline]
+    pub fn wrapping_add(self, other: Self) -> Self {
+        let (value, _did_overflow) = self.0.overflowing_add(other.0);
+        Self(value)
+    }
+
+    #[must_use = "this returns the result of the operation, without modifying the original"]
+    #[inline]
+    pub fn wrapping_sub(self, other: Self) -> Self {
+        let (value, _did_overflow) = self.0.overflowing_sub(other.0);
+        Self(value)
+    }
+
+    #[must_use = "this returns the result of the operation, without modifying the original"]
+    #[inline]
+    pub fn wrapping_mul(self, other: Self) -> Self {
+        let (value, _did_overflow) = self.0.overflowing_mul(other.0);
+        Self(value)
+    }
+
+    #[must_use = "this returns the result of the operation, without modifying the original"]
+    #[inline]
+    pub fn wrapping_pow(self, other: u32) -> Self {
+        let (value, _did_overflow) = self.0.overflowing_pow(other.into());
+        Self(value)
+    }
+
+    #[must_use = "this returns the result of the operation, without modifying the original"]
     pub fn saturating_add(self, other: Self) -> Self {
         Self(self.0.saturating_add(other.0))
     }
 
+    #[must_use = "this returns the result of the operation, without modifying the original"]
     pub fn saturating_sub(self, other: Self) -> Self {
         Self(self.0.saturating_sub(other.0))
     }
 
+    #[must_use = "this returns the result of the operation, without modifying the original"]
     pub fn saturating_mul(self, other: Self) -> Self {
         Self(self.0.saturating_mul(other.0))
     }
+
+    #[must_use = "this returns the result of the operation, without modifying the original"]
+    pub fn saturating_pow(self, exp: u32) -> Self {
+        match self.checked_pow(exp) {
+            Ok(value) => value,
+            Err(_) => Self::MAX,
+        }
+    }
+
+    #[must_use = "this returns the result of the operation, without modifying the original"]
+    pub fn abs_diff(self, other: Self) -> Self {
+        if self < other {
+            other - self
+        } else {
+            self - other
+        }
+    }
 }
+
+impl_mul_fraction!(Uint256);
 
 impl From<Uint128> for Uint256 {
     fn from(val: Uint128) -> Self {
@@ -594,10 +677,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{from_slice, to_vec};
+    use crate::errors::CheckedMultiplyFractionError::{ConversionOverflow, DivideByZero};
+    use crate::{from_slice, to_vec, Decimal, Decimal256};
 
     #[test]
-    fn uint256_construct() {
+    fn size_of_works() {
+        assert_eq!(std::mem::size_of::<Uint256>(), 32);
+    }
+
+    #[test]
+    fn uint256_new_works() {
         let num = Uint256::new([1; 32]);
         let a: [u8; 32] = num.to_be_bytes();
         assert_eq!(a, [1; 32]);
@@ -609,6 +698,30 @@ mod tests {
         let num = Uint256::new(be_bytes);
         let resulting_bytes: [u8; 32] = num.to_be_bytes();
         assert_eq!(be_bytes, resulting_bytes);
+    }
+
+    #[test]
+    fn uint256_zero_works() {
+        let zero = Uint256::zero();
+        assert_eq!(
+            zero.to_be_bytes(),
+            [
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0
+            ]
+        );
+    }
+
+    #[test]
+    fn uin256_one_works() {
+        let one = Uint256::one();
+        assert_eq!(
+            one.to_be_bytes(),
+            [
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 1,
+            ]
+        );
     }
 
     #[test]
@@ -1108,6 +1221,43 @@ mod tests {
     }
 
     #[test]
+    fn uint256_wrapping_methods() {
+        // wrapping_add
+        assert_eq!(
+            Uint256::from(2u32).wrapping_add(Uint256::from(2u32)),
+            Uint256::from(4u32)
+        ); // non-wrapping
+        assert_eq!(
+            Uint256::MAX.wrapping_add(Uint256::from(1u32)),
+            Uint256::from(0u32)
+        ); // wrapping
+
+        // wrapping_sub
+        assert_eq!(
+            Uint256::from(7u32).wrapping_sub(Uint256::from(5u32)),
+            Uint256::from(2u32)
+        ); // non-wrapping
+        assert_eq!(
+            Uint256::from(0u32).wrapping_sub(Uint256::from(1u32)),
+            Uint256::MAX
+        ); // wrapping
+
+        // wrapping_mul
+        assert_eq!(
+            Uint256::from(3u32).wrapping_mul(Uint256::from(2u32)),
+            Uint256::from(6u32)
+        ); // non-wrapping
+        assert_eq!(
+            Uint256::MAX.wrapping_mul(Uint256::from(2u32)),
+            Uint256::MAX - Uint256::one()
+        ); // wrapping
+
+        // wrapping_pow
+        assert_eq!(Uint256::from(2u32).wrapping_pow(3), Uint256::from(8u32)); // non-wrapping
+        assert_eq!(Uint256::MAX.wrapping_pow(2), Uint256::from(1u32)); // wrapping
+    }
+
+    #[test]
     fn uint256_json() {
         let orig = Uint256::from(1234567890987654321u128);
         let serialized = to_vec(&orig).unwrap();
@@ -1258,7 +1408,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn uint256_pow_overflow_panics() {
-        Uint256::MAX.pow(2u32);
+        _ = Uint256::MAX.pow(2u32);
     }
 
     #[test]
@@ -1310,7 +1460,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Denominator must not be zero")]
     fn uint256_multiply_ratio_panics_for_zero_denominator() {
-        Uint256::from(500u32).multiply_ratio(1u128, 0u128);
+        _ = Uint256::from(500u32).multiply_ratio(1u128, 0u128);
     }
 
     #[test]
@@ -1356,10 +1506,10 @@ mod tests {
         ];
         let expected = Uint256::from(762u32);
 
-        let sum_as_ref = nums.iter().sum();
+        let sum_as_ref: Uint256 = nums.iter().sum();
         assert_eq!(expected, sum_as_ref);
 
-        let sum_as_owned = nums.into_iter().sum();
+        let sum_as_owned: Uint256 = nums.into_iter().sum();
         assert_eq!(expected, sum_as_owned);
     }
 
@@ -1407,6 +1557,18 @@ mod tests {
             Ok(Uint256::from(3u32)),
         );
         assert!(matches!(
+            Uint256::MAX.checked_div_euclid(Uint256::from(0u32)),
+            Err(DivideByZeroError { .. })
+        ));
+        assert_eq!(
+            Uint256::from(6u32).checked_div_euclid(Uint256::from(2u32)),
+            Ok(Uint256::from(3u32)),
+        );
+        assert_eq!(
+            Uint256::from(7u32).checked_div_euclid(Uint256::from(2u32)),
+            Ok(Uint256::from(3u32)),
+        );
+        assert!(matches!(
             Uint256::MAX.checked_rem(Uint256::from(0u32)),
             Err(DivideByZeroError { .. })
         ));
@@ -1424,6 +1586,11 @@ mod tests {
             Uint256::MAX.saturating_mul(Uint256::from(2u32)),
             Uint256::MAX
         );
+        assert_eq!(
+            Uint256::from(4u32).saturating_pow(2u32),
+            Uint256::from(16u32)
+        );
+        assert_eq!(Uint256::MAX.saturating_pow(2u32), Uint256::MAX);
     }
 
     #[test]
@@ -1482,5 +1649,373 @@ mod tests {
         let b = Uint256::from(6u32);
         a %= &b;
         assert_eq!(a, Uint256::from(1u32));
+    }
+
+    #[test]
+    fn uint256_abs_diff_works() {
+        let a = Uint256::from(42u32);
+        let b = Uint256::from(5u32);
+        let expected = Uint256::from(37u32);
+        assert_eq!(a.abs_diff(b), expected);
+        assert_eq!(b.abs_diff(a), expected);
+    }
+
+    #[test]
+    fn uint256_partial_eq() {
+        let test_cases = [(1, 1, true), (42, 42, true), (42, 24, false), (0, 0, true)]
+            .into_iter()
+            .map(|(lhs, rhs, expected): (u64, u64, bool)| {
+                (Uint256::from(lhs), Uint256::from(rhs), expected)
+            });
+
+        #[allow(clippy::op_ref)]
+        for (lhs, rhs, expected) in test_cases {
+            assert_eq!(lhs == rhs, expected);
+            assert_eq!(&lhs == rhs, expected);
+            assert_eq!(lhs == &rhs, expected);
+            assert_eq!(&lhs == &rhs, expected);
+        }
+    }
+
+    #[test]
+    fn mul_floor_works_with_zero() {
+        let fraction = (Uint256::zero(), Uint256::from(21u32));
+        let res = Uint256::from(123456u32).mul_floor(fraction);
+        assert_eq!(Uint256::zero(), res)
+    }
+
+    #[test]
+    fn mul_floor_does_nothing_with_one() {
+        let fraction = (Uint256::one(), Uint256::one());
+        let res = Uint256::from(123456u32).mul_floor(fraction);
+        assert_eq!(Uint256::from(123456u32), res)
+    }
+
+    #[test]
+    fn mul_floor_rounds_down_with_normal_case() {
+        let fraction = (Uint256::from(8u128), Uint256::from(21u128));
+        let res = Uint256::from(123456u32).mul_floor(fraction); // 47030.8571
+        assert_eq!(Uint256::from(47030u32), res)
+    }
+
+    #[test]
+    fn mul_floor_does_not_round_on_even_divide() {
+        let fraction = (2u128, 5u128);
+        let res = Uint256::from(25u32).mul_floor(fraction);
+        assert_eq!(Uint256::from(10u32), res)
+    }
+
+    #[test]
+    fn mul_floor_works_when_operation_temporarily_takes_above_max() {
+        let fraction = (8u128, 21u128);
+        let res = Uint256::MAX.mul_floor(fraction); // 44_111_272_090_406_169_685_169_899_050_928_726_801_245_708_444_053_548_205_507_651_050_633_573_196_165.71428571
+        assert_eq!(
+            Uint256::from_str(
+                "44111272090406169685169899050928726801245708444053548205507651050633573196165"
+            )
+            .unwrap(),
+            res
+        )
+    }
+
+    #[test]
+    fn mul_floor_works_with_decimal() {
+        let decimal = Decimal::from_ratio(8u128, 21u128);
+        let res = Uint256::from(123456u32).mul_floor(decimal); // 47030.8571
+        assert_eq!(Uint256::from(47030u32), res)
+    }
+
+    #[test]
+    fn mul_floor_works_with_decimal256() {
+        let decimal = Decimal256::from_ratio(8u128, 21u128);
+        let res = Uint256::from(123456u32).mul_floor(decimal); // 47030.8571
+        assert_eq!(Uint256::from(47030u32), res)
+    }
+
+    #[test]
+    #[should_panic(expected = "ConversionOverflowError")]
+    fn mul_floor_panics_on_overflow() {
+        let fraction = (21u128, 8u128);
+        _ = Uint256::MAX.mul_floor(fraction);
+    }
+
+    #[test]
+    fn checked_mul_floor_does_not_panic_on_overflow() {
+        let fraction = (21u128, 8u128);
+        assert_eq!(
+            Uint256::MAX.checked_mul_floor(fraction),
+            Err(ConversionOverflow(ConversionOverflowError {
+                source_type: "Uint512",
+                target_type: "Uint256",
+                value:
+                    "303954234247955012986873835647805758114833709747306480603576158020771965304829"
+                        .to_string()
+            })),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "DivideByZeroError")]
+    fn mul_floor_panics_on_zero_div() {
+        let fraction = (21u128, 0u128);
+        _ = Uint256::from(123456u32).mul_floor(fraction);
+    }
+
+    #[test]
+    fn checked_mul_floor_does_not_panic_on_zero_div() {
+        let fraction = (21u128, 0u128);
+        assert_eq!(
+            Uint256::from(123456u32).checked_mul_floor(fraction),
+            Err(DivideByZero(DivideByZeroError {
+                operand: "2592576".to_string()
+            })),
+        );
+    }
+
+    #[test]
+    fn mul_ceil_works_with_zero() {
+        let fraction = (Uint256::zero(), Uint256::from(21u32));
+        let res = Uint256::from(123456u32).mul_ceil(fraction);
+        assert_eq!(Uint256::zero(), res)
+    }
+
+    #[test]
+    fn mul_ceil_does_nothing_with_one() {
+        let fraction = (Uint256::one(), Uint256::one());
+        let res = Uint256::from(123456u32).mul_ceil(fraction);
+        assert_eq!(Uint256::from(123456u32), res)
+    }
+
+    #[test]
+    fn mul_ceil_rounds_up_with_normal_case() {
+        let fraction = (8u128, 21u128);
+        let res = Uint256::from(123456u32).mul_ceil(fraction); // 47030.8571
+        assert_eq!(Uint256::from(47031u32), res)
+    }
+
+    #[test]
+    fn mul_ceil_does_not_round_on_even_divide() {
+        let fraction = (2u128, 5u128);
+        let res = Uint256::from(25u32).mul_ceil(fraction);
+        assert_eq!(Uint256::from(10u32), res)
+    }
+
+    #[test]
+    fn mul_ceil_works_when_operation_temporarily_takes_above_max() {
+        let fraction = (8u128, 21u128);
+        let res = Uint256::MAX.mul_ceil(fraction); // 44_111_272_090_406_169_685_169_899_050_928_726_801_245_708_444_053_548_205_507_651_050_633_573_196_165.71428571
+        assert_eq!(
+            Uint256::from_str(
+                "44111272090406169685169899050928726801245708444053548205507651050633573196166"
+            )
+            .unwrap(),
+            res
+        )
+    }
+
+    #[test]
+    fn mul_ceil_works_with_decimal() {
+        let decimal = Decimal::from_ratio(8u128, 21u128);
+        let res = Uint256::from(123456u32).mul_ceil(decimal); // 47030.8571
+        assert_eq!(Uint256::from(47031u32), res)
+    }
+
+    #[test]
+    fn mul_ceil_works_with_decimal256() {
+        let decimal = Decimal256::from_ratio(8u128, 21u128);
+        let res = Uint256::from(123456u32).mul_ceil(decimal); // 47030.8571
+        assert_eq!(Uint256::from(47031u32), res)
+    }
+
+    #[test]
+    #[should_panic(expected = "ConversionOverflowError")]
+    fn mul_ceil_panics_on_overflow() {
+        let fraction = (21u128, 8u128);
+        _ = Uint256::MAX.mul_ceil(fraction);
+    }
+
+    #[test]
+    fn checked_mul_ceil_does_not_panic_on_overflow() {
+        let fraction = (21u128, 8u128);
+        assert_eq!(
+            Uint256::MAX.checked_mul_ceil(fraction),
+            Err(ConversionOverflow(ConversionOverflowError {
+                source_type: "Uint512",
+                target_type: "Uint256",
+                value:
+                    "303954234247955012986873835647805758114833709747306480603576158020771965304829" // raises prior to rounding up
+                        .to_string()
+            })),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "DivideByZeroError")]
+    fn mul_ceil_panics_on_zero_div() {
+        let fraction = (21u128, 0u128);
+        _ = Uint256::from(123456u32).mul_ceil(fraction);
+    }
+
+    #[test]
+    fn checked_mul_ceil_does_not_panic_on_zero_div() {
+        let fraction = (21u128, 0u128);
+        assert_eq!(
+            Uint256::from(123456u32).checked_mul_ceil(fraction),
+            Err(DivideByZero(DivideByZeroError {
+                operand: "2592576".to_string()
+            })),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "DivideByZeroError")]
+    fn div_floor_raises_with_zero() {
+        let fraction = (Uint256::zero(), Uint256::from(21u32));
+        _ = Uint256::from(123456u128).div_floor(fraction);
+    }
+
+    #[test]
+    fn div_floor_does_nothing_with_one() {
+        let fraction = (Uint256::one(), Uint256::one());
+        let res = Uint256::from(123456u128).div_floor(fraction);
+        assert_eq!(Uint256::from(123456u128), res)
+    }
+
+    #[test]
+    fn div_floor_rounds_down_with_normal_case() {
+        let fraction = (5u128, 21u128);
+        let res = Uint256::from(123456u128).div_floor(fraction); // 518515.2
+        assert_eq!(Uint256::from(518515u128), res)
+    }
+
+    #[test]
+    fn div_floor_does_not_round_on_even_divide() {
+        let fraction = (5u128, 2u128);
+        let res = Uint256::from(25u128).div_floor(fraction);
+        assert_eq!(Uint256::from(10u128), res)
+    }
+
+    #[test]
+    fn div_floor_works_when_operation_temporarily_takes_above_max() {
+        let fraction = (21u128, 8u128);
+        let res = Uint256::MAX.div_floor(fraction); // 44_111_272_090_406_169_685_169_899_050_928_726_801_245_708_444_053_548_205_507_651_050_633_573_196_165.71428571
+        assert_eq!(
+            Uint256::from_str(
+                "44111272090406169685169899050928726801245708444053548205507651050633573196165"
+            )
+            .unwrap(),
+            res
+        )
+    }
+
+    #[test]
+    fn div_floor_works_with_decimal() {
+        let decimal = Decimal::from_ratio(21u128, 8u128);
+        let res = Uint256::from(123456u128).div_floor(decimal); // 47030.8571
+        assert_eq!(Uint256::from(47030u128), res)
+    }
+
+    #[test]
+    fn div_floor_works_with_decimal_evenly() {
+        let res = Uint256::from(60u128).div_floor(Decimal::from_atomics(6u128, 0).unwrap());
+        assert_eq!(res, Uint256::from(10u128));
+    }
+
+    #[test]
+    #[should_panic(expected = "ConversionOverflowError")]
+    fn div_floor_panics_on_overflow() {
+        let fraction = (8u128, 21u128);
+        _ = Uint256::MAX.div_floor(fraction);
+    }
+
+    #[test]
+    fn div_floor_does_not_panic_on_overflow() {
+        let fraction = (8u128, 21u128);
+        assert_eq!(
+            Uint256::MAX.checked_div_floor(fraction),
+            Err(ConversionOverflow(ConversionOverflowError {
+                source_type: "Uint512",
+                target_type: "Uint256",
+                value:
+                    "303954234247955012986873835647805758114833709747306480603576158020771965304829"
+                        .to_string()
+            })),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "DivideByZeroError")]
+    fn div_ceil_raises_with_zero() {
+        let fraction = (Uint256::zero(), Uint256::from(21u128));
+        _ = Uint256::from(123456u128).div_ceil(fraction);
+    }
+
+    #[test]
+    fn div_ceil_does_nothing_with_one() {
+        let fraction = (Uint256::one(), Uint256::one());
+        let res = Uint256::from(123456u128).div_ceil(fraction);
+        assert_eq!(Uint256::from(123456u128), res)
+    }
+
+    #[test]
+    fn div_ceil_rounds_up_with_normal_case() {
+        let fraction = (5u128, 21u128);
+        let res = Uint256::from(123456u128).div_ceil(fraction); // 518515.2
+        assert_eq!(Uint256::from(518516u128), res)
+    }
+
+    #[test]
+    fn div_ceil_does_not_round_on_even_divide() {
+        let fraction = (5u128, 2u128);
+        let res = Uint256::from(25u128).div_ceil(fraction);
+        assert_eq!(Uint256::from(10u128), res)
+    }
+
+    #[test]
+    fn div_ceil_works_when_operation_temporarily_takes_above_max() {
+        let fraction = (21u128, 8u128);
+        let res = Uint256::MAX.div_ceil(fraction); // 44_111_272_090_406_169_685_169_899_050_928_726_801_245_708_444_053_548_205_507_651_050_633_573_196_165.71428571
+        assert_eq!(
+            Uint256::from_str(
+                "44111272090406169685169899050928726801245708444053548205507651050633573196166"
+            )
+            .unwrap(),
+            res
+        )
+    }
+
+    #[test]
+    fn div_ceil_works_with_decimal() {
+        let decimal = Decimal::from_ratio(21u128, 8u128);
+        let res = Uint256::from(123456u128).div_ceil(decimal); // 47030.8571
+        assert_eq!(Uint256::from(47031u128), res)
+    }
+
+    #[test]
+    fn div_ceil_works_with_decimal_evenly() {
+        let res = Uint256::from(60u128).div_ceil(Decimal::from_atomics(6u128, 0).unwrap());
+        assert_eq!(res, Uint256::from(10u128));
+    }
+
+    #[test]
+    #[should_panic(expected = "ConversionOverflowError")]
+    fn div_ceil_panics_on_overflow() {
+        let fraction = (8u128, 21u128);
+        _ = Uint256::MAX.div_ceil(fraction);
+    }
+
+    #[test]
+    fn div_ceil_does_not_panic_on_overflow() {
+        let fraction = (8u128, 21u128);
+        assert_eq!(
+            Uint256::MAX.checked_div_ceil(fraction),
+            Err(ConversionOverflow(ConversionOverflowError {
+                source_type: "Uint512",
+                target_type: "Uint256",
+                value:
+                    "303954234247955012986873835647805758114833709747306480603576158020771965304829"
+                        .to_string() // raises prior to rounding up
+            })),
+        );
     }
 }

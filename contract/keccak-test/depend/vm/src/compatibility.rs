@@ -1,9 +1,9 @@
-use parity_wasm::elements::{External, ImportEntry, Module};
+use parity_wasm::elements::{External, ImportEntry, Module, TableType};
 use std::collections::BTreeSet;
 use std::collections::HashSet;
 
+use crate::capabilities::required_capabilities_from_module;
 use crate::errors::{VmError, VmResult};
-use crate::features::required_features_from_module;
 use crate::limited::LimitedDisplay;
 use crate::static_analysis::{deserialize_wasm, ExportInfo};
 
@@ -18,10 +18,10 @@ const SUPPORTED_IMPORTS: &[&str] = &[
     "env.addr_canonicalize",
     "env.addr_humanize",
     "env.secp256k1_verify",
-    "env.keccak256_digest",
     "env.secp256k1_recover_pubkey",
     "env.ed25519_verify",
     "env.ed25519_batch_verify",
+    "env.keccak256_digest",
     "env.debug",
     "env.query_chain",
     #[cfg(feature = "iterator")]
@@ -50,16 +50,69 @@ const SUPPORTED_INTERFACE_VERSIONS: &[&str] = &[
 ];
 
 const MEMORY_LIMIT: u32 = 512; // in pages
+/// The upper limit for the `max` value of each table. CosmWasm contracts have
+/// initial=max for 1 table. See
+///
+/// ```plain
+/// $ wasm-objdump --section=table -x packages/vm/testdata/hackatom.wasm
+/// Section Details:
+///
+/// Table[1]:
+/// - table[0] type=funcref initial=161 max=161
+/// ```
+///
+/// As of March 2023, on Juno mainnet the largest value for production contracts
+/// is 485. Most are between 100 and 300.
+const TABLE_SIZE_LIMIT: u32 = 2500; // entries
+
+/// If the contract has more than this amount of imports, it will be rejected
+/// during static validation before even looking into the imports. We keep this
+/// number high since failing early gives less detailed error messages. Especially
+/// when a user accidentally includes wasm-bindgen, they get a bunch of unsupported imports.
+const MAX_IMPORTS: usize = 100;
 
 /// Checks if the data is valid wasm and compatibility with the CosmWasm API (imports and exports)
-pub fn check_wasm(wasm_code: &[u8], supported_features: &HashSet<String>) -> VmResult<()> {
+pub fn check_wasm(wasm_code: &[u8], available_capabilities: &HashSet<String>) -> VmResult<()> {
     let module = deserialize_wasm(wasm_code)?;
+    check_wasm_tables(&module)?;
     check_wasm_memories(&module)?;
     check_interface_version(&module)?;
     check_wasm_exports(&module)?;
     check_wasm_imports(&module, SUPPORTED_IMPORTS)?;
-    check_wasm_features(&module, supported_features)?;
+    check_wasm_capabilities(&module, available_capabilities)?;
     Ok(())
+}
+
+fn check_wasm_tables(module: &Module) -> VmResult<()> {
+    let sections: &[TableType] = module
+        .table_section()
+        .map_or(&[], |section| section.entries());
+    match sections.len() {
+        0 => Ok(()),
+        1 => {
+            let limits = sections[0].limits();
+            if let Some(maximum) = limits.maximum() {
+                if limits.initial() > maximum {
+                    return Err(VmError::static_validation_err(
+                        "Wasm contract's first table section has a initial limit > max limit",
+                    ));
+                }
+                if maximum > TABLE_SIZE_LIMIT {
+                    return Err(VmError::static_validation_err(
+                        "Wasm contract's first table section has a too large max limit",
+                    ));
+                }
+                Ok(())
+            } else {
+                Err(VmError::static_validation_err(
+                    "Wasm contract must not have unbound table section",
+                ))
+            }
+        }
+        _ => Err(VmError::static_validation_err(
+            "Wasm contract must not have more than 1 table section",
+        )),
+    }
 }
 
 fn check_wasm_memories(module: &Module) -> VmResult<()> {
@@ -90,7 +143,7 @@ fn check_wasm_memories(module: &Module) -> VmResult<()> {
         )));
     }
 
-    if limits.maximum() != None {
+    if limits.maximum().is_some() {
         return Err(VmError::static_validation_err(
             "Wasm contract memory's maximum must be unset. The host will set it for you.",
         ));
@@ -145,15 +198,23 @@ fn check_wasm_exports(module: &Module) -> VmResult<()> {
 /// When this is not the case, we either have an incompatibility between contract and VM
 /// or a error in the contract.
 fn check_wasm_imports(module: &Module, supported_imports: &[&str]) -> VmResult<()> {
-    let required_imports: Vec<ImportEntry> = module
+    let required_imports: &[ImportEntry] = module
         .import_section()
-        .map_or(vec![], |import_section| import_section.entries().to_vec());
-    let required_import_names: BTreeSet<_> =
-        required_imports.iter().map(full_import_name).collect();
+        .map_or(&[], |import_section| import_section.entries());
+
+    if required_imports.len() > MAX_IMPORTS {
+        return Err(VmError::static_validation_err(format!(
+            "Import count exceeds limit. Imports: {}. Limit: {}.",
+            required_imports.len(),
+            MAX_IMPORTS
+        )));
+    }
 
     for required_import in required_imports {
-        let full_name = full_import_name(&required_import);
+        let full_name = full_import_name(required_import);
         if !supported_imports.contains(&full_name.as_str()) {
+            let required_import_names: BTreeSet<_> =
+                required_imports.iter().map(full_import_name).collect();
             return Err(VmError::static_validation_err(format!(
                 "Wasm contract requires unsupported import: \"{}\". Required imports: {}. Available imports: {:?}.",
                 full_name, required_import_names.to_string_limited(200), supported_imports
@@ -175,14 +236,19 @@ fn full_import_name(ie: &ImportEntry) -> String {
     format!("{}.{}", ie.module(), ie.field())
 }
 
-fn check_wasm_features(module: &Module, supported_features: &HashSet<String>) -> VmResult<()> {
-    let required_features = required_features_from_module(module);
-    if !required_features.is_subset(supported_features) {
+fn check_wasm_capabilities(
+    module: &Module,
+    available_capabilities: &HashSet<String>,
+) -> VmResult<()> {
+    let required_capabilities = required_capabilities_from_module(module);
+    if !required_capabilities.is_subset(available_capabilities) {
         // We switch to BTreeSet to get a sorted error message
-        let unsupported: BTreeSet<_> = required_features.difference(supported_features).collect();
+        let unavailable: BTreeSet<_> = required_capabilities
+            .difference(available_capabilities)
+            .collect();
         return Err(VmError::static_validation_err(format!(
-            "Wasm contract requires unsupported features: {}",
-            unsupported.to_string_limited(200)
+            "Wasm contract requires unavailable capabilities: {}",
+            unavailable.to_string_limited(200)
         )));
     }
     Ok(())
@@ -199,19 +265,19 @@ mod tests {
     static CONTRACT_0_15: &[u8] = include_bytes!("../testdata/hackatom_0.15.wasm");
     static CONTRACT: &[u8] = include_bytes!("../testdata/hackatom.wasm");
 
-    fn default_features() -> HashSet<String> {
-        ["staking".to_string()].iter().cloned().collect()
+    fn default_capabilities() -> HashSet<String> {
+        ["staking".to_string()].into_iter().collect()
     }
 
     #[test]
     fn check_wasm_passes_for_latest_contract() {
         // this is our reference check, must pass
-        check_wasm(CONTRACT, &default_features()).unwrap();
+        check_wasm(CONTRACT, &default_capabilities()).unwrap();
     }
 
     #[test]
     fn check_wasm_old_contract() {
-        match check_wasm(CONTRACT_0_15, &default_features()) {
+        match check_wasm(CONTRACT_0_15, &default_capabilities()) {
             Err(VmError::StaticValidationErr { msg, .. }) => assert_eq!(
                 msg,
                 "Wasm contract has unknown interface_version_* marker export (see https://github.com/CosmWasm/cosmwasm/blob/main/packages/vm/README.md)"
@@ -220,7 +286,7 @@ mod tests {
             Ok(_) => panic!("This must not succeeed"),
         };
 
-        match check_wasm(CONTRACT_0_14, &default_features()) {
+        match check_wasm(CONTRACT_0_14, &default_capabilities()) {
             Err(VmError::StaticValidationErr { msg, .. }) => assert_eq!(
                 msg,
                 "Wasm contract has unknown interface_version_* marker export (see https://github.com/CosmWasm/cosmwasm/blob/main/packages/vm/README.md)"
@@ -229,7 +295,7 @@ mod tests {
             Ok(_) => panic!("This must not succeeed"),
         };
 
-        match check_wasm(CONTRACT_0_12, &default_features()) {
+        match check_wasm(CONTRACT_0_12, &default_capabilities()) {
             Err(VmError::StaticValidationErr { msg, .. }) => assert_eq!(
                 msg,
                 "Wasm contract missing a required marker export: interface_version_*"
@@ -238,7 +304,7 @@ mod tests {
             Ok(_) => panic!("This must not succeeed"),
         };
 
-        match check_wasm(CONTRACT_0_7, &default_features()) {
+        match check_wasm(CONTRACT_0_7, &default_capabilities()) {
             Err(VmError::StaticValidationErr { msg, .. }) => assert_eq!(
                 msg,
                 "Wasm contract missing a required marker export: interface_version_*"
@@ -246,6 +312,38 @@ mod tests {
             Err(e) => panic!("Unexpected error {:?}", e),
             Ok(_) => panic!("This must not succeeed"),
         };
+    }
+
+    #[test]
+    fn check_wasm_tables_works() {
+        // No tables is fine
+        let wasm = wat::parse_str("(module)").unwrap();
+        check_wasm_tables(&deserialize_wasm(&wasm).unwrap()).unwrap();
+
+        // One table (bound)
+        let wasm = wat::parse_str("(module (table $name 123 123 funcref))").unwrap();
+        check_wasm_tables(&deserialize_wasm(&wasm).unwrap()).unwrap();
+
+        // One table (bound, initial > max)
+        let wasm = wat::parse_str("(module (table $name 124 123 funcref))").unwrap();
+        let err = check_wasm_tables(&deserialize_wasm(&wasm).unwrap()).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Wasm contract's first table section has a initial limit > max limit"));
+
+        // One table (bound, max too large)
+        let wasm = wat::parse_str("(module (table $name 100 9999 funcref))").unwrap();
+        let err = check_wasm_tables(&deserialize_wasm(&wasm).unwrap()).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Wasm contract's first table section has a too large max limit"));
+
+        // One table (unbound)
+        let wasm = wat::parse_str("(module (table $name 100 funcref))").unwrap();
+        let err = check_wasm_tables(&deserialize_wasm(&wasm).unwrap()).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Wasm contract must not have unbound table section"));
     }
 
     #[test]
@@ -548,14 +646,133 @@ mod tests {
             (import "env" "addr_canonicalize" (func (param i32 i32) (result i32)))
             (import "env" "addr_humanize" (func (param i32 i32) (result i32)))
             (import "env" "secp256k1_verify" (func (param i32 i32 i32) (result i32)))
-            (import "env" "keccak256_digest" (func (param i32) (result i64)))
             (import "env" "secp256k1_recover_pubkey" (func (param i32 i32 i32) (result i64)))
             (import "env" "ed25519_verify" (func (param i32 i32 i32) (result i32)))
             (import "env" "ed25519_batch_verify" (func (param i32 i32 i32) (result i32)))
+            (import "env" "keccak256_digest" (func (param i32) (result i64)))
         )"#,
         )
         .unwrap();
         check_wasm_imports(&deserialize_wasm(&wasm).unwrap(), SUPPORTED_IMPORTS).unwrap();
+    }
+
+    #[test]
+    fn check_wasm_imports_exceeds_limit() {
+        let wasm = wat::parse_str(
+            r#"(module
+            (import "env" "db_write" (func (param i32 i32) (result i32)))
+            (import "env" "db_remove" (func (param i32) (result i32)))
+            (import "env" "addr_validate" (func (param i32) (result i32)))
+            (import "env" "addr_canonicalize" (func (param i32 i32) (result i32)))
+            (import "env" "addr_humanize" (func (param i32 i32) (result i32)))
+            (import "env" "secp256k1_verify" (func (param i32 i32 i32) (result i32)))
+            (import "env" "secp256k1_recover_pubkey" (func (param i32 i32 i32) (result i64)))
+            (import "env" "ed25519_verify" (func (param i32 i32 i32) (result i32)))
+            (import "env" "ed25519_batch_verify" (func (param i32 i32 i32) (result i32)))
+            (import "env" "keccak256_digest" (func (param i32) (result i64)))
+            (import "env" "spam01" (func (param i32 i32) (result i32)))
+            (import "env" "spam02" (func (param i32 i32) (result i32)))
+            (import "env" "spam03" (func (param i32 i32) (result i32)))
+            (import "env" "spam04" (func (param i32 i32) (result i32)))
+            (import "env" "spam05" (func (param i32 i32) (result i32)))
+            (import "env" "spam06" (func (param i32 i32) (result i32)))
+            (import "env" "spam07" (func (param i32 i32) (result i32)))
+            (import "env" "spam08" (func (param i32 i32) (result i32)))
+            (import "env" "spam09" (func (param i32 i32) (result i32)))
+            (import "env" "spam10" (func (param i32 i32) (result i32)))
+            (import "env" "spam11" (func (param i32 i32) (result i32)))
+            (import "env" "spam12" (func (param i32 i32) (result i32)))
+            (import "env" "spam13" (func (param i32 i32) (result i32)))
+            (import "env" "spam14" (func (param i32 i32) (result i32)))
+            (import "env" "spam15" (func (param i32 i32) (result i32)))
+            (import "env" "spam16" (func (param i32 i32) (result i32)))
+            (import "env" "spam17" (func (param i32 i32) (result i32)))
+            (import "env" "spam18" (func (param i32 i32) (result i32)))
+            (import "env" "spam19" (func (param i32 i32) (result i32)))
+            (import "env" "spam20" (func (param i32 i32) (result i32)))
+            (import "env" "spam21" (func (param i32 i32) (result i32)))
+            (import "env" "spam22" (func (param i32 i32) (result i32)))
+            (import "env" "spam23" (func (param i32 i32) (result i32)))
+            (import "env" "spam24" (func (param i32 i32) (result i32)))
+            (import "env" "spam25" (func (param i32 i32) (result i32)))
+            (import "env" "spam26" (func (param i32 i32) (result i32)))
+            (import "env" "spam27" (func (param i32 i32) (result i32)))
+            (import "env" "spam28" (func (param i32 i32) (result i32)))
+            (import "env" "spam29" (func (param i32 i32) (result i32)))
+            (import "env" "spam30" (func (param i32 i32) (result i32)))
+            (import "env" "spam31" (func (param i32 i32) (result i32)))
+            (import "env" "spam32" (func (param i32 i32) (result i32)))
+            (import "env" "spam33" (func (param i32 i32) (result i32)))
+            (import "env" "spam34" (func (param i32 i32) (result i32)))
+            (import "env" "spam35" (func (param i32 i32) (result i32)))
+            (import "env" "spam36" (func (param i32 i32) (result i32)))
+            (import "env" "spam37" (func (param i32 i32) (result i32)))
+            (import "env" "spam38" (func (param i32 i32) (result i32)))
+            (import "env" "spam39" (func (param i32 i32) (result i32)))
+            (import "env" "spam40" (func (param i32 i32) (result i32)))
+            (import "env" "spam41" (func (param i32 i32) (result i32)))
+            (import "env" "spam42" (func (param i32 i32) (result i32)))
+            (import "env" "spam43" (func (param i32 i32) (result i32)))
+            (import "env" "spam44" (func (param i32 i32) (result i32)))
+            (import "env" "spam45" (func (param i32 i32) (result i32)))
+            (import "env" "spam46" (func (param i32 i32) (result i32)))
+            (import "env" "spam47" (func (param i32 i32) (result i32)))
+            (import "env" "spam48" (func (param i32 i32) (result i32)))
+            (import "env" "spam49" (func (param i32 i32) (result i32)))
+            (import "env" "spam50" (func (param i32 i32) (result i32)))
+            (import "env" "spam51" (func (param i32 i32) (result i32)))
+            (import "env" "spam52" (func (param i32 i32) (result i32)))
+            (import "env" "spam53" (func (param i32 i32) (result i32)))
+            (import "env" "spam54" (func (param i32 i32) (result i32)))
+            (import "env" "spam55" (func (param i32 i32) (result i32)))
+            (import "env" "spam56" (func (param i32 i32) (result i32)))
+            (import "env" "spam57" (func (param i32 i32) (result i32)))
+            (import "env" "spam58" (func (param i32 i32) (result i32)))
+            (import "env" "spam59" (func (param i32 i32) (result i32)))
+            (import "env" "spam60" (func (param i32 i32) (result i32)))
+            (import "env" "spam61" (func (param i32 i32) (result i32)))
+            (import "env" "spam62" (func (param i32 i32) (result i32)))
+            (import "env" "spam63" (func (param i32 i32) (result i32)))
+            (import "env" "spam64" (func (param i32 i32) (result i32)))
+            (import "env" "spam65" (func (param i32 i32) (result i32)))
+            (import "env" "spam66" (func (param i32 i32) (result i32)))
+            (import "env" "spam67" (func (param i32 i32) (result i32)))
+            (import "env" "spam68" (func (param i32 i32) (result i32)))
+            (import "env" "spam69" (func (param i32 i32) (result i32)))
+            (import "env" "spam70" (func (param i32 i32) (result i32)))
+            (import "env" "spam71" (func (param i32 i32) (result i32)))
+            (import "env" "spam72" (func (param i32 i32) (result i32)))
+            (import "env" "spam73" (func (param i32 i32) (result i32)))
+            (import "env" "spam74" (func (param i32 i32) (result i32)))
+            (import "env" "spam75" (func (param i32 i32) (result i32)))
+            (import "env" "spam76" (func (param i32 i32) (result i32)))
+            (import "env" "spam77" (func (param i32 i32) (result i32)))
+            (import "env" "spam78" (func (param i32 i32) (result i32)))
+            (import "env" "spam79" (func (param i32 i32) (result i32)))
+            (import "env" "spam80" (func (param i32 i32) (result i32)))
+            (import "env" "spam81" (func (param i32 i32) (result i32)))
+            (import "env" "spam82" (func (param i32 i32) (result i32)))
+            (import "env" "spam83" (func (param i32 i32) (result i32)))
+            (import "env" "spam84" (func (param i32 i32) (result i32)))
+            (import "env" "spam85" (func (param i32 i32) (result i32)))
+            (import "env" "spam86" (func (param i32 i32) (result i32)))
+            (import "env" "spam87" (func (param i32 i32) (result i32)))
+            (import "env" "spam88" (func (param i32 i32) (result i32)))
+            (import "env" "spam89" (func (param i32 i32) (result i32)))
+            (import "env" "spam90" (func (param i32 i32) (result i32)))
+            (import "env" "spam91" (func (param i32 i32) (result i32)))
+            (import "env" "spam92" (func (param i32 i32) (result i32)))
+        )"#,
+        )
+        .unwrap();
+        let err =
+            check_wasm_imports(&deserialize_wasm(&wasm).unwrap(), SUPPORTED_IMPORTS).unwrap_err();
+        match err {
+            VmError::StaticValidationErr { msg, .. } => {
+                assert_eq!(msg, "Import count exceeds limit. Imports: 101. Limit: 100.");
+            }
+            err => panic!("Unexpected error: {:?}", err),
+        }
     }
 
     #[test]
@@ -628,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    fn check_wasm_features_ok() {
+    fn check_wasm_capabilities_ok() {
         let wasm = wat::parse_str(
             r#"(module
             (type (func))
@@ -643,20 +860,19 @@ mod tests {
         )
         .unwrap();
         let module = deserialize_wasm(&wasm).unwrap();
-        let supported = [
+        let available = [
             "water".to_string(),
             "nutrients".to_string(),
             "sun".to_string(),
             "freedom".to_string(),
         ]
-        .iter()
-        .cloned()
+        .into_iter()
         .collect();
-        check_wasm_features(&module, &supported).unwrap();
+        check_wasm_capabilities(&module, &available).unwrap();
     }
 
     #[test]
-    fn check_wasm_features_fails_for_missing() {
+    fn check_wasm_capabilities_fails_for_missing() {
         let wasm = wat::parse_str(
             r#"(module
             (type (func))
@@ -672,56 +888,54 @@ mod tests {
         .unwrap();
         let module = deserialize_wasm(&wasm).unwrap();
 
-        // Support set 1
-        let supported = [
+        // Available set 1
+        let available = [
             "water".to_string(),
             "nutrients".to_string(),
             "freedom".to_string(),
         ]
-        .iter()
-        .cloned()
+        .into_iter()
         .collect();
-        match check_wasm_features(&module, &supported).unwrap_err() {
+        match check_wasm_capabilities(&module, &available).unwrap_err() {
             VmError::StaticValidationErr { msg, .. } => assert_eq!(
                 msg,
-                "Wasm contract requires unsupported features: {\"sun\"}"
+                "Wasm contract requires unavailable capabilities: {\"sun\"}"
             ),
             _ => panic!("Got unexpected error"),
         }
 
-        // Support set 2
-        let supported = [
+        // Available set 2
+        let available = [
             "nutrients".to_string(),
             "freedom".to_string(),
-            "Water".to_string(), // features are case sensitive (and lowercase by convention)
+            "Water".to_string(), // capabilities are case sensitive (and lowercase by convention)
         ]
-        .iter()
-        .cloned()
+        .into_iter()
         .collect();
-        match check_wasm_features(&module, &supported).unwrap_err() {
+        match check_wasm_capabilities(&module, &available).unwrap_err() {
             VmError::StaticValidationErr { msg, .. } => assert_eq!(
                 msg,
-                "Wasm contract requires unsupported features: {\"sun\", \"water\"}"
+                "Wasm contract requires unavailable capabilities: {\"sun\", \"water\"}"
             ),
             _ => panic!("Got unexpected error"),
         }
 
-        // Support set 3
-        let supported = ["freedom".to_string()].iter().cloned().collect();
-        match check_wasm_features(&module, &supported).unwrap_err() {
+        // Available set 3
+        let available = ["freedom".to_string()].into_iter().collect();
+        match check_wasm_capabilities(&module, &available).unwrap_err() {
             VmError::StaticValidationErr { msg, .. } => assert_eq!(
                 msg,
-                "Wasm contract requires unsupported features: {\"nutrients\", \"sun\", \"water\"}"
+                "Wasm contract requires unavailable capabilities: {\"nutrients\", \"sun\", \"water\"}"
             ),
             _ => panic!("Got unexpected error"),
         }
 
-        // Support set 4
-        let supported = [].iter().cloned().collect();
-        match check_wasm_features(&module, &supported).unwrap_err() {
+        // Available set 4
+        let available = [].into_iter().collect();
+        match check_wasm_capabilities(&module, &available).unwrap_err() {
             VmError::StaticValidationErr { msg, .. } => assert_eq!(
                 msg,
-                "Wasm contract requires unsupported features: {\"nutrients\", \"sun\", \"water\"}"
+                "Wasm contract requires unavailable capabilities: {\"nutrients\", \"sun\", \"water\"}"
             ),
             _ => panic!("Got unexpected error"),
         }

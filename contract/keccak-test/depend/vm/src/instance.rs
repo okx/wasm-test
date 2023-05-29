@@ -1,24 +1,27 @@
 use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
+use std::rc::Rc;
 use std::sync::Mutex;
 
 use wasmer::{Exports, Function, ImportObject, Instance as WasmerInstance, Module, Val};
 
 use crate::backend::{Backend, BackendApi, Querier, Storage};
+use crate::capabilities::required_capabilities_from_module;
 use crate::conversion::{ref_to_u32, to_u32};
 use crate::environment::Environment;
 use crate::errors::{CommunicationError, VmError, VmResult};
-use crate::features::required_features_from_module;
 use crate::imports::{
     do_abort, do_addr_canonicalize, do_addr_humanize, do_addr_validate, do_db_read, do_db_remove,
     do_db_write, do_debug, do_ed25519_batch_verify, do_ed25519_verify, do_query_chain,
-    do_secp256k1_recover_pubkey, do_secp256k1_verify,do_keccak256_digest,
+    do_secp256k1_recover_pubkey, do_secp256k1_verify, do_keccak256_digest,
 };
 #[cfg(feature = "iterator")]
 use crate::imports::{do_db_next, do_db_scan};
 use crate::memory::{read_region, write_region};
 use crate::size::Size;
 use crate::wasm_backend::compile;
+
+pub use crate::environment::DebugInfo; // Re-exported as public via to be usable for set_debug_handler
 
 #[derive(Copy, Clone, Debug)]
 pub struct GasReport {
@@ -35,6 +38,7 @@ pub struct GasReport {
 
 #[derive(Copy, Clone, Debug)]
 pub struct InstanceOptions {
+    /// Gas limit measured in [CosmWasm gas](https://github.com/CosmWasm/cosmwasm/blob/main/docs/GAS.md).
     pub gas_limit: u64,
     pub print_debug: bool,
 }
@@ -84,7 +88,12 @@ where
     ) -> VmResult<Self> {
         let store = module.store();
 
-        let env = Environment::new(backend.api, gas_limit, print_debug);
+        let env = Environment::new(backend.api, gas_limit);
+        if print_debug {
+            env.set_debug_handler(Some(Rc::new(|msg: &str, _gas_remaining| {
+                eprintln!("{msg}");
+            })))
+        }
 
         let mut import_obj = ImportObject::new();
         let mut env_imports = Exports::new();
@@ -149,11 +158,6 @@ where
         );
 
         env_imports.insert(
-            "keccak256_digest",
-            Function::new_native_with_env(store, env.clone(), do_keccak256_digest),
-        );
-
-        env_imports.insert(
             "secp256k1_recover_pubkey",
             Function::new_native_with_env(store, env.clone(), do_secp256k1_recover_pubkey),
         );
@@ -174,6 +178,11 @@ where
         env_imports.insert(
             "ed25519_batch_verify",
             Function::new_native_with_env(store, env.clone(), do_ed25519_batch_verify),
+        );
+
+        env_imports.insert(
+            "keccak256_digest",
+            Function::new_native_with_env(store, env.clone(), do_keccak256_digest),
         );
 
         // Allows the contract to emit debug logs that the host can either process or ignore.
@@ -235,7 +244,7 @@ where
                 WasmerInstance::new(module, &import_obj)
             }
             .map_err(|original| {
-                VmError::instantiation_err(format!("Error instantiating module: {:?}", original))
+                VmError::instantiation_err(format!("Error instantiating module: {original}"))
             })?,
         );
 
@@ -269,13 +278,24 @@ where
         }
     }
 
+    pub fn set_debug_handler<H>(&mut self, debug_handler: H)
+    where
+        H: for<'a> Fn(/* msg */ &'a str, DebugInfo<'a>) + 'static,
+    {
+        self.env.set_debug_handler(Some(Rc::new(debug_handler)));
+    }
+
+    pub fn unset_debug_handler(&mut self) {
+        self.env.set_debug_handler(None);
+    }
+
     /// Returns the features required by this contract.
     ///
     /// This is not needed for production because we can do static analysis
     /// on the Wasm file before instatiation to obtain this information. It's
     /// only kept because it can be handy for integration testing.
-    pub fn required_features(&self) -> HashSet<String> {
-        required_features_from_module(self._inner.module())
+    pub fn required_capabilities(&self) -> HashSet<String> {
+        required_capabilities_from_module(self._inner.module())
     }
 
     /// Returns the size of the default memory in pages.
@@ -390,6 +410,7 @@ where
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::time::SystemTime;
 
     use super::*;
     use crate::backend::Storage;
@@ -409,18 +430,56 @@ mod tests {
     const MIB: usize = 1024 * 1024;
     const DEFAULT_QUERY_GAS_LIMIT: u64 = 300_000;
     static CONTRACT: &[u8] = include_bytes!("../testdata/hackatom.wasm");
+    static CYBERPUNK: &[u8] = include_bytes!("../testdata/cyberpunk.wasm");
 
     #[test]
-    fn required_features_works() {
+    fn set_debug_handler_and_unset_debug_handler_work() {
+        const LIMIT: u64 = 70_000_000_000_000;
+        let mut instance = mock_instance_with_gas_limit(CYBERPUNK, LIMIT);
+
+        // init contract
+        let info = mock_info("creator", &coins(1000, "earth"));
+        call_instantiate::<_, _, _, Empty>(&mut instance, &mock_env(), &info, br#"{}"#)
+            .unwrap()
+            .unwrap();
+
+        let info = mock_info("caller", &[]);
+        call_execute::<_, _, _, Empty>(&mut instance, &mock_env(), &info, br#"{"debug":{}}"#)
+            .unwrap()
+            .unwrap();
+
+        let start = SystemTime::now();
+        instance.set_debug_handler(move |msg, info| {
+            let gas = info.gas_remaining;
+            let runtime = SystemTime::now().duration_since(start).unwrap().as_micros();
+            eprintln!("{msg} (gas: {gas}, runtime: {runtime}µs)");
+        });
+
+        let info = mock_info("caller", &[]);
+        call_execute::<_, _, _, Empty>(&mut instance, &mock_env(), &info, br#"{"debug":{}}"#)
+            .unwrap()
+            .unwrap();
+
+        eprintln!("Unsetting debug handler. From here nothing is printed anymore.");
+        instance.unset_debug_handler();
+
+        let info = mock_info("caller", &[]);
+        call_execute::<_, _, _, Empty>(&mut instance, &mock_env(), &info, br#"{"debug":{}}"#)
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn required_capabilities_works() {
         let backend = mock_backend(&[]);
         let (instance_options, memory_limit) = mock_instance_options();
         let instance =
             Instance::from_code(CONTRACT, backend, instance_options, memory_limit).unwrap();
-        assert_eq!(instance.required_features().len(), 0);
+        assert_eq!(instance.required_capabilities().len(), 0);
     }
 
     #[test]
-    fn required_features_works_for_many_exports() {
+    fn required_capabilities_works_for_many_exports() {
         let wasm = wat::parse_str(
             r#"(module
             (type (func))
@@ -438,10 +497,10 @@ mod tests {
         let backend = mock_backend(&[]);
         let (instance_options, memory_limit) = mock_instance_options();
         let instance = Instance::from_code(&wasm, backend, instance_options, memory_limit).unwrap();
-        assert_eq!(instance.required_features().len(), 3);
-        assert!(instance.required_features().contains("nutrients"));
-        assert!(instance.required_features().contains("sun"));
-        assert!(instance.required_features().contains("water"));
+        assert_eq!(instance.required_capabilities().len(), 3);
+        assert!(instance.required_capabilities().contains("nutrients"));
+        assert!(instance.required_capabilities().contains("sun"));
+        assert!(instance.required_capabilities().contains("water"));
     }
 
     #[test]
@@ -712,7 +771,7 @@ mod tests {
 
         let report2 = instance.create_gas_report();
         assert_eq!(report2.used_externally, 73);
-        assert_eq!(report2.used_internally, 5775750198);
+        assert_eq!(report2.used_internally, 5764950198);
         assert_eq!(report2.limit, LIMIT);
         assert_eq!(
             report2.remaining,
@@ -901,7 +960,7 @@ mod tests {
             .unwrap();
 
         let init_used = orig_gas - instance.get_gas_left();
-        assert_eq!(init_used, 5775750271);
+        assert_eq!(init_used, 5764950271);
     }
 
     #[test]
@@ -924,7 +983,7 @@ mod tests {
             .unwrap();
 
         let execute_used = gas_before_execute - instance.get_gas_left();
-        assert_eq!(execute_used, 8627053606);
+        assert_eq!(execute_used, 8548903606);
     }
 
     #[test]
@@ -958,6 +1017,6 @@ mod tests {
         assert_eq!(answer.as_slice(), b"{\"verifier\":\"verifies\"}");
 
         let query_used = gas_before_query - instance.get_gas_left();
-        assert_eq!(query_used, 4438350006);
+        assert_eq!(query_used, 4493700006);
     }
 }

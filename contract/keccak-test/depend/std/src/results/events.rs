@@ -1,15 +1,17 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::forward_ref_partial_eq;
+
 /// A full [*Cosmos SDK* event].
 ///
 /// This version uses string attributes (similar to [*Cosmos SDK* StringEvent]),
 /// which then get magically converted to bytes for Tendermint somewhere between
 /// the Rust-Go interface, JSON deserialization and the `NewEvent` call in Cosmos SDK.
 ///
-/// [*Cosmos SDK* event]: https://docs.cosmos.network/master/core/events.html
+/// [*Cosmos SDK* event]: https://docs.cosmos.network/main/core/events.html
 /// [*Cosmos SDK* StringEvent]: https://github.com/cosmos/cosmos-sdk/blob/v0.42.5/proto/cosmos/base/abci/v1beta1/abci.proto#L56-L70
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 #[non_exhaustive]
 pub struct Event {
     /// The event type. This is renamed to "ty" because "type" is reserved in Rust. This sucks, we know.
@@ -19,9 +21,11 @@ pub struct Event {
     ///
     /// You can learn more about these from [*Cosmos SDK* docs].
     ///
-    /// [*Cosmos SDK* docs]: https://docs.cosmos.network/master/core/events.html
+    /// [*Cosmos SDK* docs]: https://docs.cosmos.network/main/core/events.html
     pub attributes: Vec<Attribute>,
 }
+
+forward_ref_partial_eq!(Event, Event);
 
 impl Event {
     /// Create a new event with the given type and an empty list of attributes.
@@ -55,11 +59,13 @@ impl Event {
 }
 
 /// An key value pair that is used in the context of event attributes in logs
-#[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq, Eq, JsonSchema)]
 pub struct Attribute {
     pub key: String,
     pub value: String,
 }
+
+forward_ref_partial_eq!(Attribute, Attribute);
 
 impl Attribute {
     /// Creates a new Attribute. `attr` is just an alias for this.
@@ -108,18 +114,6 @@ impl<K: AsRef<str>, V: AsRef<str>> PartialEq<(K, V)> for &Attribute {
 impl<K: AsRef<str>, V: AsRef<str>> PartialEq<&Attribute> for (K, V) {
     fn eq(&self, attr: &&Attribute) -> bool {
         attr == self
-    }
-}
-
-impl PartialEq<Attribute> for &Attribute {
-    fn eq(&self, rhs: &Attribute) -> bool {
-        *self == rhs
-    }
-}
-
-impl PartialEq<&Attribute> for Attribute {
-    fn eq(&self, rhs: &&Attribute) -> bool {
-        self == *rhs
     }
 }
 

@@ -1,6 +1,7 @@
 //! Import implementations
 
 use std::cmp::max;
+use std::marker::PhantomData;
 
 use cosmwasm_crypto::{
     ed25519_batch_verify, ed25519_verify, secp256k1_recover_pubkey, secp256k1_verify, keccak256_digest, CryptoError,
@@ -14,7 +15,7 @@ use cosmwasm_std::Order;
 
 use crate::backend::{BackendApi, BackendError, Querier, Storage};
 use crate::conversion::{ref_to_u32, to_u32};
-use crate::environment::{process_gas_info, Environment};
+use crate::environment::{process_gas_info, DebugInfo, Environment};
 use crate::errors::{CommunicationError, VmError, VmResult};
 #[cfg(feature = "iterator")]
 use crate::memory::maybe_read_region;
@@ -212,6 +213,12 @@ pub fn do_addr_humanize<A: BackendApi, S: Storage, Q: Querier>(
     }
 }
 
+/// Return code (error code) for a valid signature
+const SECP256K1_VERIFY_CODE_VALID: u32 = 0;
+
+/// Return code (error code) for an invalid signature
+const SECP256K1_VERIFY_CODE_INVALID: u32 = 1;
+
 pub fn do_secp256k1_verify<A: BackendApi, S: Storage, Q: Querier>(
     env: &Environment<A, S, Q>,
     hash_ptr: u32,
@@ -222,11 +229,18 @@ pub fn do_secp256k1_verify<A: BackendApi, S: Storage, Q: Querier>(
     let signature = read_region(&env.memory(), signature_ptr, ECDSA_SIGNATURE_LEN)?;
     let pubkey = read_region(&env.memory(), pubkey_ptr, ECDSA_PUBKEY_MAX_LEN)?;
 
-    let result = secp256k1_verify(&hash, &signature, &pubkey);
     let gas_info = GasInfo::with_cost(env.gas_config.secp256k1_verify_cost);
     process_gas_info::<A, S, Q>(env, gas_info)?;
-    Ok(result.map_or_else(
-        |err| match err {
+    let result = secp256k1_verify(&hash, &signature, &pubkey);
+    let code = match result {
+        Ok(valid) => {
+            if valid {
+                SECP256K1_VERIFY_CODE_VALID
+            } else {
+                SECP256K1_VERIFY_CODE_INVALID
+            }
+        }
+        Err(err) => match err {
             CryptoError::InvalidHashFormat { .. }
             | CryptoError::InvalidPubkeyFormat { .. }
             | CryptoError::InvalidSignatureFormat { .. }
@@ -235,35 +249,8 @@ pub fn do_secp256k1_verify<A: BackendApi, S: Storage, Q: Querier>(
                 panic!("Error must not happen for this call")
             }
         },
-        |valid| if valid { 0 } else { 1 },
-    ))
-}
-
-pub fn do_keccak256_digest<A: BackendApi, S: Storage, Q: Querier>(
-    env: &Environment<A, S, Q>,
-    data_ptr: u32,
-) -> VmResult<u64> {
-    let data = read_region(&env.memory(), data_ptr, KECCAK256_DIGEST_LEN)?;
-
-    let result = keccak256_digest(&data);
-    let gas_info = GasInfo::with_cost(1); // todo gas
-    process_gas_info::<A, S, Q>(env, gas_info)?;
-    
-    match result {
-        Ok(digest) => {
-            let digest_ptr = write_to_contract::<A, S, Q>(env, digest.as_ref())?;
-            Ok(to_low_half(digest_ptr))
-        }
-        Err(err) => match err {
-            CryptoError::InvalidHashFormat { .. }
-            | CryptoError::InvalidSignatureFormat { .. }
-            | CryptoError::InvalidRecoveryParam { .. }
-            | CryptoError::GenericErr { .. } => Ok(to_high_half(err.code())),
-            CryptoError::BatchErr { .. } | CryptoError::InvalidPubkeyFormat { .. } => {
-                panic!("Error must not happen for this call")
-            }
-        },
-    }
+    };
+    Ok(code)
 }
 
 pub fn do_secp256k1_recover_pubkey<A: BackendApi, S: Storage, Q: Querier>(
@@ -279,9 +266,9 @@ pub fn do_secp256k1_recover_pubkey<A: BackendApi, S: Storage, Q: Querier>(
         Err(_) => return Ok((CryptoError::invalid_recovery_param().code() as u64) << 32),
     };
 
-    let result = secp256k1_recover_pubkey(&hash, &signature, recover_param);
     let gas_info = GasInfo::with_cost(env.gas_config.secp256k1_recover_pubkey_cost);
     process_gas_info::<A, S, Q>(env, gas_info)?;
+    let result = secp256k1_recover_pubkey(&hash, &signature, recover_param);
     match result {
         Ok(pubkey) => {
             let pubkey_ptr = write_to_contract::<A, S, Q>(env, pubkey.as_ref())?;
@@ -299,6 +286,12 @@ pub fn do_secp256k1_recover_pubkey<A: BackendApi, S: Storage, Q: Querier>(
     }
 }
 
+/// Return code (error code) for a valid signature
+const ED25519_VERIFY_CODE_VALID: u32 = 0;
+
+/// Return code (error code) for an invalid signature
+const ED25519_VERIFY_CODE_INVALID: u32 = 1;
+
 pub fn do_ed25519_verify<A: BackendApi, S: Storage, Q: Querier>(
     env: &Environment<A, S, Q>,
     message_ptr: u32,
@@ -309,11 +302,18 @@ pub fn do_ed25519_verify<A: BackendApi, S: Storage, Q: Querier>(
     let signature = read_region(&env.memory(), signature_ptr, MAX_LENGTH_ED25519_SIGNATURE)?;
     let pubkey = read_region(&env.memory(), pubkey_ptr, EDDSA_PUBKEY_LEN)?;
 
-    let result = ed25519_verify(&message, &signature, &pubkey);
     let gas_info = GasInfo::with_cost(env.gas_config.ed25519_verify_cost);
     process_gas_info::<A, S, Q>(env, gas_info)?;
-    Ok(result.map_or_else(
-        |err| match err {
+    let result = ed25519_verify(&message, &signature, &pubkey);
+    let code = match result {
+        Ok(valid) => {
+            if valid {
+                ED25519_VERIFY_CODE_VALID
+            } else {
+                ED25519_VERIFY_CODE_INVALID
+            }
+        }
+        Err(err) => match err {
             CryptoError::InvalidPubkeyFormat { .. }
             | CryptoError::InvalidSignatureFormat { .. }
             | CryptoError::GenericErr { .. } => err.code(),
@@ -323,8 +323,8 @@ pub fn do_ed25519_verify<A: BackendApi, S: Storage, Q: Querier>(
                 panic!("Error must not happen for this call")
             }
         },
-        |valid| if valid { 0 } else { 1 },
-    ))
+    };
+    Ok(code)
 }
 
 pub fn do_ed25519_batch_verify<A: BackendApi, S: Storage, Q: Querier>(
@@ -353,7 +353,6 @@ pub fn do_ed25519_batch_verify<A: BackendApi, S: Storage, Q: Querier>(
     let signatures = decode_sections(&signatures);
     let public_keys = decode_sections(&public_keys);
 
-    let result = ed25519_batch_verify(&messages, &signatures, &public_keys);
     let gas_cost = if public_keys.len() == 1 {
         env.gas_config.ed25519_batch_verify_one_pubkey_cost
     } else {
@@ -361,8 +360,16 @@ pub fn do_ed25519_batch_verify<A: BackendApi, S: Storage, Q: Querier>(
     } * signatures.len() as u64;
     let gas_info = GasInfo::with_cost(max(gas_cost, env.gas_config.ed25519_verify_cost));
     process_gas_info::<A, S, Q>(env, gas_info)?;
-    Ok(result.map_or_else(
-        |err| match err {
+    let result = ed25519_batch_verify(&messages, &signatures, &public_keys);
+    let code = match result {
+        Ok(valid) => {
+            if valid {
+                ED25519_VERIFY_CODE_VALID
+            } else {
+                ED25519_VERIFY_CODE_INVALID
+            }
+        }
+        Err(err) => match err {
             CryptoError::BatchErr { .. }
             | CryptoError::InvalidPubkeyFormat { .. }
             | CryptoError::InvalidSignatureFormat { .. }
@@ -371,8 +378,35 @@ pub fn do_ed25519_batch_verify<A: BackendApi, S: Storage, Q: Querier>(
                 panic!("Error must not happen for this call")
             }
         },
-        |valid| (!valid).into(),
-    ))
+    };
+    Ok(code)
+}
+
+pub fn do_keccak256_digest<A: BackendApi, S: Storage, Q: Querier>(
+    env: &Environment<A, S, Q>,
+    data_ptr: u32,
+) -> VmResult<u64> {
+    let data = read_region(&env.memory(), data_ptr, KECCAK256_DIGEST_LEN)?;
+
+    let result = keccak256_digest(&data);
+    let gas_info = GasInfo::with_cost(1); // todo gas
+    process_gas_info::<A, S, Q>(env, gas_info)?;
+
+    match result {
+        Ok(digest) => {
+            let digest_ptr = write_to_contract::<A, S, Q>(env, digest.as_ref())?;
+            Ok(to_low_half(digest_ptr))
+        }
+        Err(err) => match err {
+            CryptoError::InvalidHashFormat { .. }
+            | CryptoError::InvalidSignatureFormat { .. }
+            | CryptoError::InvalidRecoveryParam { .. }
+            | CryptoError::GenericErr { .. } => Ok(to_high_half(err.code())),
+            CryptoError::BatchErr { .. } | CryptoError::InvalidPubkeyFormat { .. } => {
+                panic!("Error must not happen for this call")
+            }
+        },
+    }
 }
 
 /// Prints a debug message to console.
@@ -381,10 +415,17 @@ pub fn do_debug<A: BackendApi, S: Storage, Q: Querier>(
     env: &Environment<A, S, Q>,
     message_ptr: u32,
 ) -> VmResult<()> {
-    if env.print_debug {
+    if let Some(debug_handler) = env.debug_handler() {
         let message_data = read_region(&env.memory(), message_ptr, MAX_LENGTH_DEBUG)?;
         let msg = String::from_utf8_lossy(&message_data);
-        println!("{}", msg);
+        let gas_remaining = env.get_gas_left();
+        (*debug_handler)(
+            &msg,
+            DebugInfo {
+                gas_remaining,
+                __lifetime: PhantomData::default(),
+            },
+        );
     }
     Ok(())
 }
@@ -534,7 +575,7 @@ mod tests {
         Box<WasmerInstance>,
     ) {
         let gas_limit = TESTING_GAS_LIMIT;
-        let env = Environment::new(api, gas_limit, false);
+        let env = Environment::new(api, gas_limit);
 
         let module = compile(CONTRACT, TESTING_MEMORY_LIMIT, &[]).unwrap();
         let store = module.store();
@@ -551,11 +592,12 @@ mod tests {
                 "addr_canonicalize" => Function::new_native(store, |_a: u32, _b: u32| -> u32 { 0 }),
                 "addr_humanize" => Function::new_native(store, |_a: u32, _b: u32| -> u32 { 0 }),
                 "secp256k1_verify" => Function::new_native(store, |_a: u32, _b: u32, _c: u32| -> u32 { 0 }),
-                "keccak256_digest" => Function::new_native(store, |_a: u32| -> u64 { 0 }),
                 "secp256k1_recover_pubkey" => Function::new_native(store, |_a: u32, _b: u32, _c: u32| -> u64 { 0 }),
                 "ed25519_verify" => Function::new_native(store, |_a: u32, _b: u32, _c: u32| -> u32 { 0 }),
                 "ed25519_batch_verify" => Function::new_native(store, |_a: u32, _b: u32, _c: u32| -> u32 { 0 }),
+                "keccak256_digest" => Function::new_native(store, |_a: u32| -> u64 { 0 }),
                 "debug" => Function::new_native(store, |_a: u32| {}),
+                "abort" => Function::new_native(store, |_a: u32| {}),
             },
         };
         let instance = Box::from(WasmerInstance::new(&module, &import_obj).unwrap());
@@ -616,7 +658,7 @@ mod tests {
         let result = do_db_read(&env, key_ptr);
         let value_ptr = result.unwrap();
         assert!(value_ptr > 0);
-        assert_eq!(force_read(&env, value_ptr as u32), VALUE1);
+        assert_eq!(force_read(&env, value_ptr), VALUE1);
     }
 
     #[test]
@@ -915,7 +957,10 @@ mod tests {
         let res = do_addr_validate(&env, source_ptr3).unwrap();
         assert_ne!(res, 0);
         let err = String::from_utf8(force_read(&env, res)).unwrap();
-        assert_eq!(err, "Invalid input: human address too long");
+        assert_eq!(
+            err,
+            "Invalid input: human address too long for this mock implementation (must be <= 64)."
+        );
 
         let res = do_addr_validate(&env, source_ptr4).unwrap();
         assert_ne!(res, 0);
@@ -1010,7 +1055,10 @@ mod tests {
         let res = do_addr_canonicalize(&env, source_ptr3, dest_ptr).unwrap();
         assert_ne!(res, 0);
         let err = String::from_utf8(force_read(&env, res)).unwrap();
-        assert_eq!(err, "Invalid input: human address too long");
+        assert_eq!(
+            err,
+            "Invalid input: human address too long for this mock implementation (must be <= 64)."
+        );
     }
 
     #[test]

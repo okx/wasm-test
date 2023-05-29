@@ -11,7 +11,7 @@ use cosmwasm_vm::testing::{
     mock_backend, mock_env, mock_info, mock_instance_options, MockApi, MockQuerier, MockStorage,
 };
 use cosmwasm_vm::{
-    call_execute, call_instantiate, features_from_csv, Cache, CacheOptions, Checksum, Instance,
+    call_execute, call_instantiate, capabilities_from_csv, Cache, CacheOptions, Checksum, Instance,
     InstanceOptions, Size,
 };
 
@@ -32,6 +32,7 @@ const INSTANTIATION_THREADS: usize = 128;
 const CONTRACTS: u64 = 10;
 
 static CONTRACT: &[u8] = include_bytes!("../testdata/hackatom.wasm");
+static CYBERPUNK: &[u8] = include_bytes!("../testdata/cyberpunk.wasm");
 
 fn bench_instance(c: &mut Criterion) {
     let mut group = c.benchmark_group("Instance");
@@ -94,12 +95,11 @@ fn bench_instance(c: &mut Criterion) {
             ..DEFAULT_INSTANCE_OPTIONS
         };
         let mut instance =
-            Instance::from_code(CONTRACT, backend, much_gas, Some(DEFAULT_MEMORY_LIMIT)).unwrap();
+            Instance::from_code(CYBERPUNK, backend, much_gas, Some(DEFAULT_MEMORY_LIMIT)).unwrap();
 
         let info = mock_info("creator", &coins(1000, "earth"));
-        let msg = br#"{"verifier": "verifies", "beneficiary": "benefits"}"#;
         let contract_result =
-            call_instantiate::<_, _, _, Empty>(&mut instance, &mock_env(), &info, msg).unwrap();
+            call_instantiate::<_, _, _, Empty>(&mut instance, &mock_env(), &info, b"{}").unwrap();
         assert!(contract_result.into_result().is_ok());
 
         let mut gas_used = 0;
@@ -123,7 +123,7 @@ fn bench_cache(c: &mut Criterion) {
 
     let options = CacheOptions {
         base_dir: TempDir::new().unwrap().into_path(),
-        supported_features: features_from_csv("iterator,staking"),
+        available_capabilities: capabilities_from_csv("iterator,staking"),
         memory_cache_size: MEMORY_CACHE_SIZE,
         instance_memory_limit: DEFAULT_MEMORY_LIMIT,
     };
@@ -163,7 +163,7 @@ fn bench_cache(c: &mut Criterion) {
     group.bench_function("instantiate from fs", |b| {
         let non_memcache = CacheOptions {
             base_dir: TempDir::new().unwrap().into_path(),
-            supported_features: features_from_csv("iterator,staking"),
+            available_capabilities: capabilities_from_csv("iterator,staking"),
             memory_cache_size: Size(0),
             instance_memory_limit: DEFAULT_MEMORY_LIMIT,
         };
@@ -229,7 +229,7 @@ pub fn bench_instance_threads(c: &mut Criterion) {
     c.bench_function("multi-threaded get_instance", |b| {
         let options = CacheOptions {
             base_dir: TempDir::new().unwrap().into_path(),
-            supported_features: features_from_csv("iterator,staking"),
+            available_capabilities: capabilities_from_csv("iterator,staking"),
             memory_cache_size: MEMORY_CACHE_SIZE,
             instance_memory_limit: DEFAULT_MEMORY_LIMIT,
         };

@@ -145,6 +145,11 @@ pub enum VmError {
         #[cfg(feature = "backtraces")]
         backtrace: Backtrace,
     },
+    #[error("Maximum call depth exceeded.")]
+    MaxCallDepthExceeded {
+        #[cfg(feature = "backtraces")]
+        backtrace: Backtrace,
+    },
 }
 
 impl VmError {
@@ -314,6 +319,13 @@ impl VmError {
             backtrace: Backtrace::capture(),
         }
     }
+
+    pub(crate) fn max_call_depth_exceeded() -> Self {
+        VmError::MaxCallDepthExceeded {
+            #[cfg(feature = "backtraces")]
+            backtrace: Backtrace::capture(),
+        }
+    }
 }
 
 impl From<BackendError> for VmError {
@@ -361,7 +373,7 @@ impl From<wasmer::RuntimeError> for VmError {
             original.to_string().starts_with(&message),
             "The error message we created is not a prefix of the error message from Wasmer. Our message: '{}'. Wasmer messsage: '{}'",
             &message,
-            original.to_string()
+            original
         );
         VmError::runtime_err(format!("Wasmer runtime error: {}", &message))
     }

@@ -7,9 +7,12 @@ use crate::Empty;
 
 mod bank;
 mod ibc;
+mod query_response;
 mod staking;
 mod wasm;
 
+#[cfg(feature = "cosmwasm_1_1")]
+pub use bank::SupplyResponse;
 pub use bank::{AllBalanceResponse, BalanceResponse, BankQuery};
 #[cfg(feature = "stargate")]
 pub use ibc::{ChannelResponse, IbcQuery, ListChannelsResponse, PortIdResponse};
@@ -18,10 +21,12 @@ pub use staking::{
     AllDelegationsResponse, AllValidatorsResponse, BondedDenomResponse, Delegation,
     DelegationResponse, FullDelegation, StakingQuery, Validator, ValidatorResponse,
 };
+#[cfg(feature = "cosmwasm_1_2")]
+pub use wasm::CodeInfoResponse;
 pub use wasm::{ContractInfoResponse, WasmQuery};
 
 #[non_exhaustive]
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryRequest<C> {
     Bank(BankQuery),
