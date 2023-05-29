@@ -52,7 +52,7 @@ pub fn try_test_vm(deps: DepsMut, count :i32, inputdata: String) -> Result<Respo
     let mut temp: String = "".to_string();
     while number != count {
         number += 1;
-        let result = deps.api.keccak256_digest(&data.to_owned().unwrap());
+        let result = deps.api.keccak256(&data.to_owned().unwrap());
         if number == 1 {
             temp = hex::encode(result.unwrap());
         }

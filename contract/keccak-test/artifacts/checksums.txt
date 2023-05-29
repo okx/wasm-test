@@ -1,1 +1,1 @@
-c246ee74f45484f1d6ad1026d6baece68b85f7063d95e2cb74c0b47b7c3f5f4e  keccak_test.wasm
+9aac691bcab7bc847e05a15313faef9a73221b8a491196ffc1635e6a0833b5e4  keccak_test.wasm
