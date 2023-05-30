@@ -47,12 +47,13 @@ pub fn test(deps: DepsMut, mode: i32, count :i32, data: String) -> Result<Respon
 
 pub fn try_test_vm(deps: DepsMut, count :i32, inputdata: String) -> Result<Response, ContractError> {
 
-    let data  = hex::decode(inputdata).to_owned();
+    // let data  = hex::decode(inputdata).to_owned();
+    let data: &str = &inputdata;
     let mut number = 0;
     let mut temp: String = "".to_string();
     while number != count {
         number += 1;
-        let result = deps.api.keccak256(&data.to_owned().unwrap());
+        let result = deps.api.keccak256(data.as_bytes());
         if number == 1 {
             temp = hex::encode(result.unwrap());
         }
@@ -61,13 +62,12 @@ pub fn try_test_vm(deps: DepsMut, count :i32, inputdata: String) -> Result<Respo
 }
 
 pub fn try_test_contract(deps: DepsMut, count :i32, inputdata: String) -> Result<Response, ContractError> {
-    let data  = hex::decode(inputdata).to_owned();
-
+    let data: &str = &inputdata;
     let mut number = 0;
     let mut temp: String = "".to_string();
     while number != count {
         number += 1;
-        let hash = Keccak256::digest(&data.to_owned().unwrap());
+        let hash = Keccak256::digest(data.as_bytes());
         if number == 1 {
             temp = hex::encode(hash);
         }
