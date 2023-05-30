@@ -1,3 +1,4 @@
+use backtrace::Backtrace;
 use std::sync::Arc;
 #[cfg(feature = "cranelift")]
 use wasmer::Cranelift;
@@ -36,18 +37,33 @@ pub fn make_engine(middlewares: &[Arc<dyn ModuleMiddleware>]) -> Engine {
     let deterministic = Arc::new(Gatekeeper::default());
     let metering = Arc::new(Metering::new(gas_limit, cost));
 
+    let bt = Backtrace::new();
+    println!("backtrace dump start ===============");
+    println!("{:?}", bt);
+
     #[cfg(feature = "cranelift")]
-    let mut compiler = Cranelift::default();
+    {
+        let mut compiler = Cranelift::default();
+        println!("-------------Cranelift------------------");
+        for middleware in middlewares {
+            compiler.push_middleware(middleware.clone());
+        }
+        compiler.push_middleware(deterministic);
+        compiler.push_middleware(metering);
+        compiler.into()
+    }
 
     #[cfg(not(feature = "cranelift"))]
-    let mut compiler = Singlepass::default();
-
-    for middleware in middlewares {
-        compiler.push_middleware(middleware.clone());
+    {
+        let mut compiler = Singlepass::default();
+        println!("-------------Singlepass------------------");
+        for middleware in middlewares {
+            compiler.push_middleware(middleware.clone());
+        }
+        compiler.push_middleware(deterministic);
+        compiler.push_middleware(metering);
+        compiler.into()
     }
-    compiler.push_middleware(deterministic);
-    compiler.push_middleware(metering);
-    compiler.into()
 }
 
 /// Created a store with no compiler and the given memory limit (in bytes)

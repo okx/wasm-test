@@ -8,7 +8,7 @@ repository = "https://github.com/CosmWasm/cosmwasm/tree/main/packages/vm"
 license = "Apache-2.0"
 
 [features]
-default = ["staking", "iterator"]
+default = ["staking", "iterator", "cranelift"]
 # backtraces provides much better context at runtime errors (in non-wasm code)
 # at the cost of a bit of code size and performance.
 # This feature requires Rust nightly because it depends on the unstable backtrace feature.
@@ -24,6 +24,7 @@ staking = ["cosmwasm-std/staking"]
 stargate = ["cosmwasm-std/stargate", "cosmwasm-std/ibc3"]
 # Use cranelift backend instead of singlepass. This is required for development on Windows.
 cranelift = ["wasmer/cranelift"]
+llvm = ["wasmer/llvm"]
 # It's a bit unclear if interface_version_7 (CosmWasm 0.16) contracts are fully compatible
 # with newer hosts. If old contracts are important to you and you are willing to take the risk,
 # activate this feature.
@@ -49,8 +50,8 @@ serde = { version = "1.0.103", default-features = false, features = ["derive", "
 serde_json = "1.0.40"
 sha2 = "0.10.3"
 thiserror = "1.0.26"
-wasmer = { version = "=3.3.0", default-features = false, features = ["cranelift", "singlepass"] }
-wasmer-middlewares = "=3.3.0"
+# wasmer = { version = "=3.3.0", default-features = false, features = ["cranelift", "singlepass"] }
+# wasmer-middlewares = "=3.3.0"
 
 # Dependencies that we do not use ourself. We add those entries
 # to bump the min version of them.
@@ -61,8 +62,10 @@ bitflags = "1.1.0" # https://github.com/CensoredUsername/dynasm-rs/pull/74
 # Wasmer git/local (used for quick local debugging or patching)
 # wasmer = { git = "https://github.com/wasmerio/wasmer", rev = "877ce1f7c44fad853c", default-features = false, features = ["cranelift", "singlepass"] }
 # wasmer-middlewares = { git = "https://github.com/wasmerio/wasmer", rev = "877ce1f7c44fad853c" }
-# wasmer = { path = "../../../wasmer/lib/api", default-features = false, features = ["cranelift", "singlepass"] }
-# wasmer-middlewares = { path = "../../../wasmer/lib/middlewares" }
+wasmer = { path = "../../../wasmer/lib/api", default-features = false, features = ["cranelift", "singlepass"] }
+wasmer-middlewares = { path = "../../../wasmer/lib/middlewares" }
+stdext = "0.3.1"
+backtrace = "0.3.65"
 
 [dev-dependencies]
 criterion = { version = "0.4", features = [ "html_reports" ] }
