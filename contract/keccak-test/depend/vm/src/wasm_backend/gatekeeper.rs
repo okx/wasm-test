@@ -1,10 +1,11 @@
+use loupe::MemoryUsage;
 use wasmer::wasmparser::Operator;
 use wasmer::{
     FunctionMiddleware, LocalFunctionIndex, MiddlewareError, MiddlewareReaderState,
     ModuleMiddleware,
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, MemoryUsage, Clone, Copy)]
 struct GatekeeperConfig {
     /// True iff float operations are allowed.
     ///
@@ -38,7 +39,7 @@ struct GatekeeperConfig {
 
 /// A middleware that ensures only deterministic operations are used (i.e. no floats).
 /// It also disallows the use of Wasm features that are not explicitly enabled.
-#[derive(Debug)]
+#[derive(Debug, MemoryUsage)]
 #[non_exhaustive]
 pub struct Gatekeeper {
     config: GatekeeperConfig,
@@ -438,6 +439,8 @@ impl FunctionMiddleware for FunctionGatekeeper {
             | Operator::V128Load16x4U { .. }
             | Operator::V128Load32x2S { .. }
             | Operator::V128Load32x2U { .. }
+            | Operator::I8x16RoundingAverageU
+            | Operator::I16x8RoundingAverageU
             | Operator::V128Load8Lane { .. }
             | Operator::V128Load16Lane { .. }
             | Operator::V128Load32Lane { .. }
@@ -453,7 +456,6 @@ impl FunctionMiddleware for FunctionGatekeeper {
             | Operator::I64x2LeS
             | Operator::I64x2GeS
             | Operator::I8x16Popcnt
-            | Operator::I16x8AvgrU
             | Operator::I16x8ExtAddPairwiseI8x16S
             | Operator::I16x8ExtAddPairwiseI8x16U
             | Operator::I16x8Q15MulrSatS
@@ -483,8 +485,7 @@ impl FunctionMiddleware for FunctionGatekeeper {
             | Operator::F64x2ConvertLowI32x4S
             | Operator::F64x2ConvertLowI32x4U
             | Operator::F32x4DemoteF64x2Zero
-            | Operator::F64x2PromoteLowF32x4
-            | Operator::I8x16AvgrU => {
+            | Operator::F64x2PromoteLowF32x4 => {
                 if self.config.allow_feature_simd {
                     state.push_operator(operator);
                     Ok(())
@@ -495,34 +496,6 @@ impl FunctionMiddleware for FunctionGatekeeper {
                     );
                     Err(MiddlewareError::new(MIDDLEWARE_NAME, msg))
                 }
-            }
-            // Relaxed SIMD operators
-            Operator::I8x16RelaxedSwizzle
-            | Operator::I32x4RelaxedTruncSatF32x4S
-            | Operator::I32x4RelaxedTruncSatF32x4U
-            | Operator::I32x4RelaxedTruncSatF64x2SZero
-            | Operator::I32x4RelaxedTruncSatF64x2UZero
-            | Operator::F32x4RelaxedFma
-            | Operator::F32x4RelaxedFnma
-            | Operator::F64x2RelaxedFma
-            | Operator::F64x2RelaxedFnma
-            | Operator::I8x16RelaxedLaneselect
-            | Operator::I16x8RelaxedLaneselect
-            | Operator::I32x4RelaxedLaneselect
-            | Operator::I64x2RelaxedLaneselect
-            | Operator::F32x4RelaxedMin
-            | Operator::F32x4RelaxedMax
-            | Operator::F64x2RelaxedMin
-            | Operator::F64x2RelaxedMax
-            | Operator::I16x8RelaxedQ15mulrS
-            | Operator::I16x8DotI8x16I7x16S
-            | Operator::I32x4DotI8x16I7x16AddS
-            | Operator::F32x4RelaxedDotBf16x8AddF32x4 => {
-                let msg = format!(
-                    "Relaxed SIMD operator detected: {:?}. The Wasm Relaxed SIMD extension is not supported.",
-                    operator
-                );
-                Err(MiddlewareError::new(MIDDLEWARE_NAME, msg))
             }
             Operator::F32Load { .. }
             | Operator::F64Load { .. }
@@ -683,6 +656,7 @@ impl FunctionMiddleware for FunctionGatekeeper {
             | Operator::Catch { .. }
             | Operator::Throw { .. }
             | Operator::Rethrow { .. }
+            | Operator::Unwind { .. }
             | Operator::Delegate { .. }
             | Operator::CatchAll => {
                 if self.config.allow_feature_exception_handling {
@@ -701,7 +675,7 @@ impl FunctionMiddleware for FunctionGatekeeper {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use wasmer::{CompilerConfig, Cranelift, Module, Store};
+    use wasmer::{CompilerConfig, Cranelift, Module, Store, Universal};
 
     #[test]
     fn valid_wasm_instance_sanity() {
@@ -718,10 +692,10 @@ mod tests {
         .unwrap();
 
         let deterministic = Arc::new(Gatekeeper::default());
-        let mut compiler = Cranelift::default();
-        compiler.push_middleware(deterministic);
-        let store = Store::new(compiler);
-        let result = Module::new(&store, wasm);
+        let mut compiler_config = Cranelift::default();
+        compiler_config.push_middleware(deterministic);
+        let store = Store::new(&Universal::new(compiler_config).engine());
+        let result = Module::new(&store, &wasm);
         assert!(result.is_ok());
     }
 
@@ -739,10 +713,10 @@ mod tests {
         .unwrap();
 
         let deterministic = Arc::new(Gatekeeper::default());
-        let mut compiler = Cranelift::default();
-        compiler.push_middleware(deterministic);
-        let store = Store::new(compiler);
-        let result = Module::new(&store, wasm);
+        let mut compiler_config = Cranelift::default();
+        compiler_config.push_middleware(deterministic);
+        let store = Store::new(&Universal::new(compiler_config).engine());
+        let result = Module::new(&store, &wasm);
         assert!(result
             .unwrap_err()
             .to_string()
@@ -766,10 +740,10 @@ mod tests {
         .unwrap();
 
         let deterministic = Arc::new(Gatekeeper::default());
-        let mut compiler = Cranelift::default();
-        compiler.push_middleware(deterministic);
-        let store = Store::new(compiler);
-        let result = Module::new(&store, wasm);
+        let mut compiler_config = Cranelift::default();
+        compiler_config.push_middleware(deterministic);
+        let store = Store::new(&Universal::new(compiler_config).engine());
+        let result = Module::new(&store, &wasm);
         assert!(result
             .unwrap_err()
             .to_string()

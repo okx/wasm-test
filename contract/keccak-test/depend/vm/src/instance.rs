@@ -1,29 +1,24 @@
 use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
-use std::rc::Rc;
 use std::sync::Mutex;
 
-use wasmer::{
-    Exports, Function, FunctionEnv, Imports, Instance as WasmerInstance, Module, Store, Value,
-};
+use wasmer::{Exports, Function, ImportObject, Instance as WasmerInstance, Module, Val};
 
 use crate::backend::{Backend, BackendApi, Querier, Storage};
-use crate::capabilities::required_capabilities_from_module;
 use crate::conversion::{ref_to_u32, to_u32};
 use crate::environment::Environment;
 use crate::errors::{CommunicationError, VmError, VmResult};
+use crate::features::required_features_from_module;
 use crate::imports::{
     do_abort, do_addr_canonicalize, do_addr_humanize, do_addr_validate, do_db_read, do_db_remove,
-    do_db_write, do_debug, do_ed25519_batch_verify, do_ed25519_verify, do_keccak256,
-    do_query_chain, do_secp256k1_recover_pubkey, do_secp256k1_verify,
+    do_db_write, do_debug, do_ed25519_batch_verify, do_ed25519_verify, do_query_chain,
+    do_secp256k1_recover_pubkey, do_secp256k1_verify,do_keccak256_digest,
 };
 #[cfg(feature = "iterator")]
 use crate::imports::{do_db_next, do_db_scan};
 use crate::memory::{read_region, write_region};
 use crate::size::Size;
-use crate::wasm_backend::{compile, make_store_with_engine};
-
-pub use crate::environment::DebugInfo; // Re-exported as public via to be usable for set_debug_handler
+use crate::wasm_backend::compile;
 
 #[derive(Copy, Clone, Debug)]
 pub struct GasReport {
@@ -40,7 +35,6 @@ pub struct GasReport {
 
 #[derive(Copy, Clone, Debug)]
 pub struct InstanceOptions {
-    /// Gas limit measured in [CosmWasm gas](https://github.com/CosmWasm/cosmwasm/blob/main/docs/GAS.md).
     pub gas_limit: u64,
     pub print_debug: bool,
 }
@@ -52,8 +46,7 @@ pub struct Instance<A: BackendApi, S: Storage, Q: Querier> {
     ///
     /// This instance should only be accessed via the Environment, which provides safe access.
     _inner: Box<WasmerInstance>,
-    fe: FunctionEnv<Environment<A, S, Q>>,
-    store: Store,
+    env: Environment<A, S, Q>,
 }
 
 impl<A, S, Q> Instance<A, S, Q>
@@ -70,10 +63,8 @@ where
         options: InstanceOptions,
         memory_limit: Option<Size>,
     ) -> VmResult<Self> {
-        let (engine, module) = compile(code, &[])?;
-        let store = make_store_with_engine(engine, memory_limit);
+        let module = compile(code, memory_limit, &[])?;
         Instance::from_module(
-            store,
             &module,
             backend,
             options.gas_limit,
@@ -83,9 +74,7 @@ where
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_module(
-        mut store: Store,
         module: &Module,
         backend: Backend<A, S, Q>,
         gas_limit: u64,
@@ -93,17 +82,11 @@ where
         extra_imports: Option<HashMap<&str, Exports>>,
         instantiation_lock: Option<&Mutex<()>>,
     ) -> VmResult<Self> {
-        let fe = FunctionEnv::new(&mut store, {
-            let e = Environment::new(backend.api, gas_limit);
-            if print_debug {
-                e.set_debug_handler(Some(Rc::new(|msg: &str, _gas_remaining| {
-                    eprintln!("{msg}");
-                })))
-            }
-            e
-        });
+        let store = module.store();
 
-        let mut import_obj = Imports::new();
+        let env = Environment::new(backend.api, gas_limit, print_debug);
+
+        let mut import_obj = ImportObject::new();
         let mut env_imports = Exports::new();
 
         // Reads the database entry at the given key into the the value.
@@ -112,14 +95,14 @@ where
         // Ownership of the value pointer is transferred to the contract.
         env_imports.insert(
             "db_read",
-            Function::new_typed_with_env(&mut store, &fe, do_db_read),
+            Function::new_native_with_env(store, env.clone(), do_db_read),
         );
 
         // Writes the given value into the database entry at the given key.
         // Ownership of both input and output pointer is not transferred to the host.
         env_imports.insert(
             "db_write",
-            Function::new_typed_with_env(&mut store, &fe, do_db_write),
+            Function::new_native_with_env(store, env.clone(), do_db_write),
         );
 
         // Removes the value at the given key. Different than writing &[] as future
@@ -128,7 +111,7 @@ where
         // Ownership of both key pointer is not transferred to the host.
         env_imports.insert(
             "db_remove",
-            Function::new_typed_with_env(&mut store, &fe, do_db_remove),
+            Function::new_native_with_env(store, env.clone(), do_db_remove),
         );
 
         // Reads human address from source_ptr and checks if it is valid.
@@ -136,7 +119,7 @@ where
         // Ownership of the input pointer is not transferred to the host.
         env_imports.insert(
             "addr_validate",
-            Function::new_typed_with_env(&mut store, &fe, do_addr_validate),
+            Function::new_native_with_env(store, env.clone(), do_addr_validate),
         );
 
         // Reads human address from source_ptr and writes canonicalized representation to destination_ptr.
@@ -145,7 +128,7 @@ where
         // Ownership of both input and output pointer is not transferred to the host.
         env_imports.insert(
             "addr_canonicalize",
-            Function::new_typed_with_env(&mut store, &fe, do_addr_canonicalize),
+            Function::new_native_with_env(store, env.clone(), do_addr_canonicalize),
         );
 
         // Reads canonical address from source_ptr and writes humanized representation to destination_ptr.
@@ -154,7 +137,7 @@ where
         // Ownership of both input and output pointer is not transferred to the host.
         env_imports.insert(
             "addr_humanize",
-            Function::new_typed_with_env(&mut store, &fe, do_addr_humanize),
+            Function::new_native_with_env(store, env.clone(), do_addr_humanize),
         );
 
         // Verifies message hashes against a signature with a public key, using the secp256k1 ECDSA parametrization.
@@ -162,12 +145,17 @@ where
         // Ownership of input pointers is not transferred to the host.
         env_imports.insert(
             "secp256k1_verify",
-            Function::new_typed_with_env(&mut store, &fe, do_secp256k1_verify),
+            Function::new_native_with_env(store, env.clone(), do_secp256k1_verify),
+        );
+
+        env_imports.insert(
+            "keccak256_digest",
+            Function::new_native_with_env(store, env.clone(), do_keccak256_digest),
         );
 
         env_imports.insert(
             "secp256k1_recover_pubkey",
-            Function::new_typed_with_env(&mut store, &fe, do_secp256k1_recover_pubkey),
+            Function::new_native_with_env(store, env.clone(), do_secp256k1_recover_pubkey),
         );
 
         // Verifies a message against a signature with a public key, using the ed25519 EdDSA scheme.
@@ -175,7 +163,7 @@ where
         // Ownership of input pointers is not transferred to the host.
         env_imports.insert(
             "ed25519_verify",
-            Function::new_typed_with_env(&mut store, &fe, do_ed25519_verify),
+            Function::new_native_with_env(store, env.clone(), do_ed25519_verify),
         );
 
         // Verifies a batch of messages against a batch of signatures with a batch of public keys,
@@ -185,12 +173,7 @@ where
         // Ownership of input pointers is not transferred to the host.
         env_imports.insert(
             "ed25519_batch_verify",
-            Function::new_typed_with_env(&mut store, &fe, do_ed25519_batch_verify),
-        );
-
-        env_imports.insert(
-            "keccak256",
-            Function::new_typed_with_env(&mut store, &fe, do_keccak256),
+            Function::new_native_with_env(store, env.clone(), do_ed25519_batch_verify),
         );
 
         // Allows the contract to emit debug logs that the host can either process or ignore.
@@ -199,7 +182,7 @@ where
         // Ownership of both input and output pointer is not transferred to the host.
         env_imports.insert(
             "debug",
-            Function::new_typed_with_env(&mut store, &fe, do_debug),
+            Function::new_native_with_env(store, env.clone(), do_debug),
         );
 
         // Aborts the contract execution with an error message provided by the contract.
@@ -207,12 +190,12 @@ where
         // Ownership of both input and output pointer is not transferred to the host.
         env_imports.insert(
             "abort",
-            Function::new_typed_with_env(&mut store, &fe, do_abort),
+            Function::new_native_with_env(store, env.clone(), do_abort),
         );
 
         env_imports.insert(
             "query_chain",
-            Function::new_typed_with_env(&mut store, &fe, do_query_chain),
+            Function::new_native_with_env(store, env.clone(), do_query_chain),
         );
 
         // Creates an iterator that will go from start to end.
@@ -224,7 +207,7 @@ where
         #[cfg(feature = "iterator")]
         env_imports.insert(
             "db_scan",
-            Function::new_typed_with_env(&mut store, &fe, do_db_scan),
+            Function::new_native_with_env(store, env.clone(), do_db_scan),
         );
 
         // Get next element of iterator with ID `iterator_id`.
@@ -235,68 +218,47 @@ where
         #[cfg(feature = "iterator")]
         env_imports.insert(
             "db_next",
-            Function::new_typed_with_env(&mut store, &fe, do_db_next),
+            Function::new_native_with_env(store, env.clone(), do_db_next),
         );
 
-        import_obj.register_namespace("env", env_imports);
+        import_obj.register("env", env_imports);
 
         if let Some(extra_imports) = extra_imports {
             for (namespace, exports_obj) in extra_imports {
-                import_obj.register_namespace(namespace, exports_obj);
+                import_obj.register(namespace, exports_obj);
             }
         }
 
         let wasmer_instance = Box::from(
             {
                 let _lock = instantiation_lock.map(|l| l.lock().unwrap());
-                WasmerInstance::new(&mut store, module, &import_obj)
+                WasmerInstance::new(module, &import_obj)
             }
             .map_err(|original| {
-                VmError::instantiation_err(format!("Error instantiating module: {original}"))
+                VmError::instantiation_err(format!("Error instantiating module: {:?}", original))
             })?,
         );
 
-        let memory = wasmer_instance
-            .exports
-            .get_memory("memory")
-            .map_err(|original| {
-                VmError::instantiation_err(format!("Could not get memory 'memory': {original}"))
-            })?
-            .clone();
-
         let instance_ptr = NonNull::from(wasmer_instance.as_ref());
-
-        {
-            let mut fe_mut = fe.clone().into_mut(&mut store);
-            let (env, mut store) = fe_mut.data_and_store_mut();
-
-            env.memory = Some(memory);
-            env.set_wasmer_instance(Some(instance_ptr));
-            env.set_gas_left(&mut store, gas_limit);
-            env.move_in(backend.storage, backend.querier);
-        }
-
-        Ok(Instance {
+        env.set_wasmer_instance(Some(instance_ptr));
+        env.set_gas_left(gas_limit);
+        env.move_in(backend.storage, backend.querier);
+        let instance = Instance {
             _inner: wasmer_instance,
-            fe,
-            store,
-        })
+            env,
+        };
+        Ok(instance)
     }
 
     pub fn api(&self) -> &A {
-        &self.fe.as_ref(&self.store).api
+        &self.env.api
     }
 
     /// Decomposes this instance into its components.
     /// External dependencies are returned for reuse, the rest is dropped.
     pub fn recycle(self) -> Option<Backend<A, S, Q>> {
-        let Instance {
-            _inner, fe, store, ..
-        } = self;
-
-        let env = fe.as_ref(&store);
-        if let (Some(storage), Some(querier)) = env.move_out() {
-            let api = env.api;
+        if let (Some(storage), Some(querier)) = self.env.move_out() {
+            let api = self.env.api;
             Some(Backend {
                 api,
                 storage,
@@ -307,56 +269,34 @@ where
         }
     }
 
-    pub fn set_debug_handler<H>(&mut self, debug_handler: H)
-    where
-        H: for<'a> Fn(/* msg */ &'a str, DebugInfo<'a>) + 'static,
-    {
-        self.fe
-            .as_ref(&self.store)
-            .set_debug_handler(Some(Rc::new(debug_handler)));
-    }
-
-    pub fn unset_debug_handler(&mut self) {
-        self.fe.as_ref(&self.store).set_debug_handler(None);
-    }
-
     /// Returns the features required by this contract.
     ///
     /// This is not needed for production because we can do static analysis
     /// on the Wasm file before instatiation to obtain this information. It's
     /// only kept because it can be handy for integration testing.
-    pub fn required_capabilities(&self) -> HashSet<String> {
-        required_capabilities_from_module(self._inner.module())
+    pub fn required_features(&self) -> HashSet<String> {
+        required_features_from_module(self._inner.module())
     }
 
     /// Returns the size of the default memory in pages.
     /// This provides a rough idea of the peak memory consumption. Note that
     /// Wasm memory always grows in 64 KiB steps (pages) and can never shrink
     /// (https://github.com/WebAssembly/design/issues/1300#issuecomment-573867836).
-    pub fn memory_pages(&mut self) -> usize {
-        let mut fe_mut = self.fe.clone().into_mut(&mut self.store);
-        let (env, mut store) = fe_mut.data_and_store_mut();
-
-        env.memory(&mut store).size().0 as _
+    pub fn memory_pages(&self) -> usize {
+        self.env.memory().size().0 as _
     }
 
     /// Returns the currently remaining gas.
-    pub fn get_gas_left(&mut self) -> u64 {
-        let mut fe_mut = self.fe.clone().into_mut(&mut self.store);
-        let (env, mut store) = fe_mut.data_and_store_mut();
-
-        env.get_gas_left(&mut store)
+    pub fn get_gas_left(&self) -> u64 {
+        self.env.get_gas_left()
     }
 
     /// Creates and returns a gas report.
     /// This is a snapshot and multiple reports can be created during the lifetime of
     /// an instance.
-    pub fn create_gas_report(&mut self) -> GasReport {
-        let mut fe_mut = self.fe.clone().into_mut(&mut self.store);
-        let (env, mut store) = fe_mut.data_and_store_mut();
-
-        let state = env.with_gas_state(|gas_state| gas_state.clone());
-        let gas_left = env.get_gas_left(&mut store);
+    pub fn create_gas_report(&self) -> GasReport {
+        let state = self.env.with_gas_state(|gas_state| gas_state.clone());
+        let gas_left = self.env.get_gas_left();
         GasReport {
             limit: state.gas_limit,
             remaining: gas_left,
@@ -371,33 +311,19 @@ where
         }
     }
 
-    pub fn is_storage_readonly(&mut self) -> bool {
-        let mut fe_mut = self.fe.clone().into_mut(&mut self.store);
-        let (env, _) = fe_mut.data_and_store_mut();
-
-        env.is_storage_readonly()
-    }
-
     /// Sets the readonly storage flag on this instance. Since one instance can be used
     /// for multiple calls in integration tests, this should be set to the desired value
     /// right before every call.
     pub fn set_storage_readonly(&mut self, new_value: bool) {
-        let mut fe_mut = self.fe.clone().into_mut(&mut self.store);
-        let (env, _) = fe_mut.data_and_store_mut();
-
-        env.set_storage_readonly(new_value);
+        self.env.set_storage_readonly(new_value);
     }
 
     pub fn with_storage<F: FnOnce(&mut S) -> VmResult<T>, T>(&mut self, func: F) -> VmResult<T> {
-        self.fe
-            .as_ref(&self.store)
-            .with_storage_from_context::<F, T>(func)
+        self.env.with_storage_from_context::<F, T>(func)
     }
 
     pub fn with_querier<F: FnOnce(&mut Q) -> VmResult<T>, T>(&mut self, func: F) -> VmResult<T> {
-        self.fe
-            .as_ref(&self.store)
-            .with_querier_from_context::<F, T>(func)
+        self.env.with_querier_from_context::<F, T>(func)
     }
 
     /// Requests memory allocation by the instance and returns a pointer
@@ -420,45 +346,32 @@ where
     }
 
     /// Copies all data described by the Region at the given pointer from Wasm to the caller.
-    pub(crate) fn read_memory(&mut self, region_ptr: u32, max_length: usize) -> VmResult<Vec<u8>> {
-        let mut fe_mut = self.fe.clone().into_mut(&mut self.store);
-        let (env, mut store) = fe_mut.data_and_store_mut();
-
-        read_region(&env.memory(&mut store), region_ptr, max_length)
+    pub(crate) fn read_memory(&self, region_ptr: u32, max_length: usize) -> VmResult<Vec<u8>> {
+        read_region(&self.env.memory(), region_ptr, max_length)
     }
 
     /// Copies data to the memory region that was created before using allocate.
     pub(crate) fn write_memory(&mut self, region_ptr: u32, data: &[u8]) -> VmResult<()> {
-        let mut fe_mut = self.fe.clone().into_mut(&mut self.store);
-        let (env, mut store) = fe_mut.data_and_store_mut();
-
-        write_region(&env.memory(&mut store), region_ptr, data)?;
+        write_region(&self.env.memory(), region_ptr, data)?;
         Ok(())
     }
 
     /// Calls a function exported by the instance.
     /// The function is expected to return no value. Otherwise this calls errors.
-    pub(crate) fn call_function0(&mut self, name: &str, args: &[Value]) -> VmResult<()> {
-        let mut fe_mut = self.fe.clone().into_mut(&mut self.store);
-        let (env, mut store) = fe_mut.data_and_store_mut();
-
-        env.call_function0(&mut store, name, args)
+    pub(crate) fn call_function0(&self, name: &str, args: &[Val]) -> VmResult<()> {
+        self.env.call_function0(name, args)
     }
 
     /// Calls a function exported by the instance.
     /// The function is expected to return one value. Otherwise this calls errors.
-    pub(crate) fn call_function1(&mut self, name: &str, args: &[Value]) -> VmResult<Value> {
-        let mut fe_mut = self.fe.clone().into_mut(&mut self.store);
-        let (env, mut store) = fe_mut.data_and_store_mut();
-
-        env.call_function1(&mut store, name, args)
+    pub(crate) fn call_function1(&self, name: &str, args: &[Val]) -> VmResult<Val> {
+        self.env.call_function1(name, args)
     }
 }
 
 /// This exists only to be exported through `internals` for use by crates that are
 /// part of Cosmwasm.
 pub fn instance_from_module<A, S, Q>(
-    store: Store,
     module: &Module,
     backend: Backend<A, S, Q>,
     gas_limit: u64,
@@ -470,22 +383,13 @@ where
     S: Storage + 'static, // 'static is needed here to allow using this in an Environment that is cloned into closures
     Q: Querier + 'static,
 {
-    Instance::from_module(
-        store,
-        module,
-        backend,
-        gas_limit,
-        print_debug,
-        extra_imports,
-        None,
-    )
+    Instance::from_module(module, backend, gas_limit, print_debug, extra_imports, None)
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
-    use std::time::SystemTime;
 
     use super::*;
     use crate::backend::Storage;
@@ -500,75 +404,25 @@ mod tests {
         coin, coins, from_binary, AllBalanceResponse, BalanceResponse, BankQuery, Empty,
         QueryRequest,
     };
-    use wasmer::{FunctionEnv, FunctionEnvMut};
 
     const KIB: usize = 1024;
     const MIB: usize = 1024 * 1024;
     const DEFAULT_QUERY_GAS_LIMIT: u64 = 300_000;
     static CONTRACT: &[u8] = include_bytes!("../testdata/hackatom.wasm");
-    static CYBERPUNK: &[u8] = include_bytes!("../testdata/cyberpunk.wasm");
 
     #[test]
-    fn from_code_works() {
-        let backend = mock_backend(&[]);
-        let (instance_options, memory_limit) = mock_instance_options();
-        let _instance =
-            Instance::from_code(CONTRACT, backend, instance_options, memory_limit).unwrap();
-    }
-
-    #[test]
-    fn set_debug_handler_and_unset_debug_handler_work() {
-        const LIMIT: u64 = 70_000_000_000_000;
-        let mut instance = mock_instance_with_gas_limit(CYBERPUNK, LIMIT);
-
-        // init contract
-        let info = mock_info("creator", &coins(1000, "earth"));
-        call_instantiate::<_, _, _, Empty>(&mut instance, &mock_env(), &info, br#"{}"#)
-            .unwrap()
-            .unwrap();
-
-        let info = mock_info("caller", &[]);
-        call_execute::<_, _, _, Empty>(&mut instance, &mock_env(), &info, br#"{"debug":{}}"#)
-            .unwrap()
-            .unwrap();
-
-        let start = SystemTime::now();
-        instance.set_debug_handler(move |msg, info| {
-            let gas = info.gas_remaining;
-            let runtime = SystemTime::now().duration_since(start).unwrap().as_micros();
-            eprintln!("{msg} (gas: {gas}, runtime: {runtime}µs)");
-        });
-
-        let info = mock_info("caller", &[]);
-        call_execute::<_, _, _, Empty>(&mut instance, &mock_env(), &info, br#"{"debug":{}}"#)
-            .unwrap()
-            .unwrap();
-
-        eprintln!("Unsetting debug handler. From here nothing is printed anymore.");
-        instance.unset_debug_handler();
-
-        let info = mock_info("caller", &[]);
-        call_execute::<_, _, _, Empty>(&mut instance, &mock_env(), &info, br#"{"debug":{}}"#)
-            .unwrap()
-            .unwrap();
-    }
-
-    #[test]
-    fn required_capabilities_works() {
+    fn required_features_works() {
         let backend = mock_backend(&[]);
         let (instance_options, memory_limit) = mock_instance_options();
         let instance =
             Instance::from_code(CONTRACT, backend, instance_options, memory_limit).unwrap();
-        assert_eq!(instance.required_capabilities().len(), 0);
+        assert_eq!(instance.required_features().len(), 0);
     }
 
     #[test]
-    fn required_capabilities_works_for_many_exports() {
+    fn required_features_works_for_many_exports() {
         let wasm = wat::parse_str(
             r#"(module
-            (memory 3)
-            (export "memory" (memory 0))
-
             (type (func))
             (func (type 0) nop)
             (export "requires_water" (func 0))
@@ -584,10 +438,10 @@ mod tests {
         let backend = mock_backend(&[]);
         let (instance_options, memory_limit) = mock_instance_options();
         let instance = Instance::from_code(&wasm, backend, instance_options, memory_limit).unwrap();
-        assert_eq!(instance.required_capabilities().len(), 3);
-        assert!(instance.required_capabilities().contains("nutrients"));
-        assert!(instance.required_capabilities().contains("sun"));
-        assert!(instance.required_capabilities().contains("water"));
+        assert_eq!(instance.required_features().len(), 3);
+        assert!(instance.required_features().contains("nutrients"));
+        assert!(instance.required_features().contains("sun"));
+        assert!(instance.required_features().contains("water"));
     }
 
     #[test]
@@ -595,8 +449,6 @@ mod tests {
         let wasm = wat::parse_str(
             r#"(module
             (import "foo" "bar" (func $bar))
-            (memory 3)
-            (export "memory" (memory 0))
             (func (export "main") (call $bar))
             )"#,
         )
@@ -604,35 +456,27 @@ mod tests {
 
         let backend = mock_backend(&[]);
         let (instance_options, memory_limit) = mock_instance_options();
-        let (engine, module) = compile(&wasm, &[]).unwrap();
-        let mut store = make_store_with_engine(engine, memory_limit);
+        let module = compile(&wasm, memory_limit, &[]).unwrap();
 
-        let called = Arc::new(AtomicBool::new(false));
-
-        #[derive(Clone)]
+        #[derive(wasmer::WasmerEnv, Clone)]
         struct MyEnv {
             // This can be mutated across threads safely. We initialize it as `false`
             // and let our imported fn switch it to `true` to confirm it works.
             called: Arc<AtomicBool>,
         }
 
-        let fe = FunctionEnv::new(
-            &mut store,
-            MyEnv {
-                called: called.clone(),
-            },
-        );
+        let my_env = MyEnv {
+            called: Arc::new(AtomicBool::new(false)),
+        };
 
-        let fun =
-            Function::new_typed_with_env(&mut store, &fe, move |fe_mut: FunctionEnvMut<MyEnv>| {
-                fe_mut.data().called.store(true, Ordering::Relaxed);
-            });
+        let fun = Function::new_native_with_env(module.store(), my_env.clone(), |env: &MyEnv| {
+            env.called.store(true, Ordering::Relaxed);
+        });
         let mut exports = Exports::new();
         exports.insert("bar", fun);
         let mut extra_imports = HashMap::new();
         extra_imports.insert("foo", exports);
-        let mut instance = Instance::from_module(
-            store,
+        let instance = Instance::from_module(
             &module,
             backend,
             instance_options.gas_limit,
@@ -642,14 +486,15 @@ mod tests {
         )
         .unwrap();
 
-        instance.call_function0("main", &[]).unwrap();
+        let main = instance._inner.exports.get_function("main").unwrap();
+        main.call(&[]).unwrap();
 
-        assert!(called.load(Ordering::Relaxed));
+        assert!(my_env.called.load(Ordering::Relaxed));
     }
 
     #[test]
     fn call_function0_works() {
-        let mut instance = mock_instance(CONTRACT, &[]);
+        let instance = mock_instance(CONTRACT, &[]);
 
         instance
             .call_function0("interface_version_8", &[])
@@ -658,7 +503,7 @@ mod tests {
 
     #[test]
     fn call_function1_works() {
-        let mut instance = mock_instance(CONTRACT, &[]);
+        let instance = mock_instance(CONTRACT, &[]);
 
         // can call function few times
         let result = instance
@@ -802,7 +647,7 @@ mod tests {
             )"#,
         )
         .unwrap();
-        let mut instance = mock_instance(&wasm, &[]);
+        let instance = mock_instance(&wasm, &[]);
         assert_eq!(instance.memory_pages(), 0);
 
         // min: 3 pages, max: none
@@ -820,7 +665,7 @@ mod tests {
             )"#,
         )
         .unwrap();
-        let mut instance = mock_instance(&wasm, &[]);
+        let instance = mock_instance(&wasm, &[]);
         assert_eq!(instance.memory_pages(), 3);
     }
 
@@ -842,7 +687,7 @@ mod tests {
 
     #[test]
     fn get_gas_left_works() {
-        let mut instance = mock_instance_with_gas_limit(CONTRACT, 123321);
+        let instance = mock_instance_with_gas_limit(CONTRACT, 123321);
         let orig_gas = instance.get_gas_left();
         assert_eq!(orig_gas, 123321);
     }
@@ -867,7 +712,7 @@ mod tests {
 
         let report2 = instance.create_gas_report();
         assert_eq!(report2.used_externally, 73);
-        assert_eq!(report2.used_internally, 5764950198);
+        assert_eq!(report2.used_internally, 5775750198);
         assert_eq!(report2.limit, LIMIT);
         assert_eq!(
             report2.remaining,
@@ -879,16 +724,16 @@ mod tests {
     fn set_storage_readonly_works() {
         let mut instance = mock_instance(CONTRACT, &[]);
 
-        assert!(instance.is_storage_readonly());
+        assert!(instance.env.is_storage_readonly());
 
         instance.set_storage_readonly(false);
-        assert!(!instance.is_storage_readonly());
+        assert!(!instance.env.is_storage_readonly());
 
         instance.set_storage_readonly(false);
-        assert!(!instance.is_storage_readonly());
+        assert!(!instance.env.is_storage_readonly());
 
         instance.set_storage_readonly(true);
-        assert!(instance.is_storage_readonly());
+        assert!(instance.env.is_storage_readonly());
     }
 
     #[test]
@@ -1056,7 +901,7 @@ mod tests {
             .unwrap();
 
         let init_used = orig_gas - instance.get_gas_left();
-        assert_eq!(init_used, 5764950271);
+        assert_eq!(init_used, 5775750271);
     }
 
     #[test]
@@ -1079,7 +924,7 @@ mod tests {
             .unwrap();
 
         let execute_used = gas_before_execute - instance.get_gas_left();
-        assert_eq!(execute_used, 8548903606);
+        assert_eq!(execute_used, 8627053606);
     }
 
     #[test]
@@ -1113,6 +958,6 @@ mod tests {
         assert_eq!(answer.as_slice(), b"{\"verifier\":\"verifies\"}");
 
         let query_used = gas_before_query - instance.get_gas_left();
-        assert_eq!(query_used, 4493700006);
+        assert_eq!(query_used, 4438350006);
     }
 }

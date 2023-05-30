@@ -10,7 +10,7 @@ use std::str::FromStr;
 use crate::errors::{
     ConversionOverflowError, DivideByZeroError, OverflowError, OverflowOperation, StdError,
 };
-use crate::{forward_ref_partial_eq, Uint128, Uint256, Uint64};
+use crate::{Uint128, Uint256, Uint64};
 
 /// This module is purely a workaround that lets us ignore lints for all the code
 /// the `construct_uint!` macro generates.
@@ -52,11 +52,8 @@ use uints::U512;
 #[derive(Copy, Clone, Default, Debug, PartialEq, Eq, PartialOrd, Ord, JsonSchema)]
 pub struct Uint512(#[schemars(with = "String")] U512);
 
-forward_ref_partial_eq!(Uint512, Uint512);
-
 impl Uint512 {
     pub const MAX: Uint512 = Uint512(U512::MAX);
-    pub const MIN: Uint512 = Uint512(U512::zero());
 
     /// Creates a Uint512(value) from a big endian representation. It's just an alias for
     /// `from_big_endian`.
@@ -65,22 +62,10 @@ impl Uint512 {
     }
 
     /// Creates a Uint512(0)
-    #[inline]
     pub const fn zero() -> Self {
         Uint512(U512::zero())
     }
 
-    /// Creates a Uint512(1)
-    #[inline]
-    pub const fn one() -> Self {
-        Self::from_be_bytes([
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 1,
-        ])
-    }
-
-    #[must_use]
     pub const fn from_be_bytes(data: [u8; 64]) -> Self {
         let words: [u64; 8] = [
             u64::from_le_bytes([
@@ -111,7 +96,6 @@ impl Uint512 {
         Self(U512(words))
     }
 
-    #[must_use]
     pub const fn from_le_bytes(data: [u8; 64]) -> Self {
         let words: [u64; 8] = [
             u64::from_le_bytes([
@@ -144,7 +128,6 @@ impl Uint512 {
 
     /// A conversion from `Uint256` that, unlike the one provided by the `From` trait,
     /// can be used in a `const` context.
-    #[must_use]
     pub const fn from_uint256(num: Uint256) -> Self {
         let bytes = num.to_le_bytes();
         Self::from_le_bytes([
@@ -158,7 +141,6 @@ impl Uint512 {
     }
 
     /// Returns a copy of the number as big endian bytes.
-    #[must_use = "this returns the result of the operation, without modifying the original"]
     pub const fn to_be_bytes(self) -> [u8; 64] {
         let words = [
             (self.0).0[7].to_be_bytes(),
@@ -174,7 +156,6 @@ impl Uint512 {
     }
 
     /// Returns a copy of the number as little endian bytes.
-    #[must_use = "this returns the result of the operation, without modifying the original"]
     pub const fn to_le_bytes(self) -> [u8; 64] {
         let words = [
             (self.0).0[0].to_le_bytes(),
@@ -189,7 +170,6 @@ impl Uint512 {
         unsafe { std::mem::transmute::<[[u8; 8]; 8], [u8; 64]>(words) }
     }
 
-    #[must_use]
     pub const fn is_zero(&self) -> bool {
         let words = (self.0).0;
         words[0] == 0
@@ -202,7 +182,6 @@ impl Uint512 {
             && words[7] == 0
     }
 
-    #[must_use = "this returns the result of the operation, without modifying the original"]
     pub fn pow(self, exp: u32) -> Self {
         let res = self.0.pow(exp.into());
         Self(res)
@@ -243,10 +222,6 @@ impl Uint512 {
             .ok_or_else(|| DivideByZeroError::new(self))
     }
 
-    pub fn checked_div_euclid(self, other: Self) -> Result<Self, DivideByZeroError> {
-        self.checked_div(other)
-    }
-
     pub fn checked_rem(self, other: Self) -> Result<Self, DivideByZeroError> {
         self.0
             .checked_rem(other.0)
@@ -262,64 +237,16 @@ impl Uint512 {
         Ok(Self(self.0.shr(other)))
     }
 
-    #[must_use = "this returns the result of the operation, without modifying the original"]
-    #[inline]
-    pub fn wrapping_add(self, other: Self) -> Self {
-        let (value, _did_overflow) = self.0.overflowing_add(other.0);
-        Self(value)
-    }
-
-    #[must_use = "this returns the result of the operation, without modifying the original"]
-    #[inline]
-    pub fn wrapping_sub(self, other: Self) -> Self {
-        let (value, _did_overflow) = self.0.overflowing_sub(other.0);
-        Self(value)
-    }
-
-    #[must_use = "this returns the result of the operation, without modifying the original"]
-    #[inline]
-    pub fn wrapping_mul(self, other: Self) -> Self {
-        let (value, _did_overflow) = self.0.overflowing_mul(other.0);
-        Self(value)
-    }
-
-    #[must_use = "this returns the result of the operation, without modifying the original"]
-    #[inline]
-    pub fn wrapping_pow(self, other: u32) -> Self {
-        let (value, _did_overflow) = self.0.overflowing_pow(other.into());
-        Self(value)
-    }
-
-    #[must_use = "this returns the result of the operation, without modifying the original"]
     pub fn saturating_add(self, other: Self) -> Self {
         Self(self.0.saturating_add(other.0))
     }
 
-    #[must_use = "this returns the result of the operation, without modifying the original"]
     pub fn saturating_sub(self, other: Self) -> Self {
         Self(self.0.saturating_sub(other.0))
     }
 
-    #[must_use = "this returns the result of the operation, without modifying the original"]
     pub fn saturating_mul(self, other: Self) -> Self {
         Self(self.0.saturating_mul(other.0))
-    }
-
-    #[must_use = "this returns the result of the operation, without modifying the original"]
-    pub fn saturating_pow(self, exp: u32) -> Self {
-        match self.checked_pow(exp) {
-            Ok(value) => value,
-            Err(_) => Self::MAX,
-        }
-    }
-
-    #[must_use = "this returns the result of the operation, without modifying the original"]
-    pub fn abs_diff(self, other: Self) -> Self {
-        if self < other {
-            other - self
-        } else {
-            self - other
-        }
     }
 }
 
@@ -630,12 +557,7 @@ mod tests {
     use crate::{from_slice, to_vec};
 
     #[test]
-    fn size_of_works() {
-        assert_eq!(std::mem::size_of::<Uint512>(), 64);
-    }
-
-    #[test]
-    fn uint512_new_works() {
+    fn uint512_construct() {
         let num = Uint512::new([1; 64]);
         let a: [u8; 64] = num.to_be_bytes();
         assert_eq!(a, [1; 64]);
@@ -649,32 +571,6 @@ mod tests {
         let num = Uint512::new(be_bytes);
         let resulting_bytes: [u8; 64] = num.to_be_bytes();
         assert_eq!(be_bytes, resulting_bytes);
-    }
-
-    #[test]
-    fn uint512_zero_works() {
-        let zero = Uint512::zero();
-        assert_eq!(
-            zero.to_be_bytes(),
-            [
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0
-            ]
-        );
-    }
-
-    #[test]
-    fn uin512_one_works() {
-        let one = Uint512::one();
-        assert_eq!(
-            one.to_be_bytes(),
-            [
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 1
-            ]
-        );
     }
 
     #[test]
@@ -904,43 +800,6 @@ mod tests {
     }
 
     #[test]
-    fn uint512_wrapping_methods() {
-        // wrapping_add
-        assert_eq!(
-            Uint512::from(2u32).wrapping_add(Uint512::from(2u32)),
-            Uint512::from(4u32)
-        ); // non-wrapping
-        assert_eq!(
-            Uint512::MAX.wrapping_add(Uint512::from(1u32)),
-            Uint512::from(0u32)
-        ); // wrapping
-
-        // wrapping_sub
-        assert_eq!(
-            Uint512::from(7u32).wrapping_sub(Uint512::from(5u32)),
-            Uint512::from(2u32)
-        ); // non-wrapping
-        assert_eq!(
-            Uint512::from(0u32).wrapping_sub(Uint512::from(1u32)),
-            Uint512::MAX
-        ); // wrapping
-
-        // wrapping_mul
-        assert_eq!(
-            Uint512::from(3u32).wrapping_mul(Uint512::from(2u32)),
-            Uint512::from(6u32)
-        ); // non-wrapping
-        assert_eq!(
-            Uint512::MAX.wrapping_mul(Uint512::from(2u32)),
-            Uint512::MAX - Uint512::one()
-        ); // wrapping
-
-        // wrapping_pow
-        assert_eq!(Uint512::from(2u32).wrapping_pow(3), Uint512::from(8u32)); // non-wrapping
-        assert_eq!(Uint512::MAX.wrapping_pow(2), Uint512::from(1u32)); // wrapping
-    }
-
-    #[test]
     fn uint512_json() {
         let orig = Uint512::from(1234567890987654321u128);
         let serialized = to_vec(&orig).unwrap();
@@ -1091,7 +950,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn uint512_pow_overflow_panics() {
-        _ = Uint512::MAX.pow(2u32);
+        Uint512::MAX.pow(2u32);
     }
 
     #[test]
@@ -1129,10 +988,10 @@ mod tests {
         ];
         let expected = Uint512::from(762u32);
 
-        let sum_as_ref: Uint512 = nums.iter().sum();
+        let sum_as_ref = nums.iter().sum();
         assert_eq!(expected, sum_as_ref);
 
-        let sum_as_owned: Uint512 = nums.into_iter().sum();
+        let sum_as_owned = nums.into_iter().sum();
         assert_eq!(expected, sum_as_owned);
     }
 
@@ -1180,18 +1039,6 @@ mod tests {
             Ok(Uint512::from(3u32)),
         );
         assert!(matches!(
-            Uint512::MAX.checked_div_euclid(Uint512::from(0u32)),
-            Err(DivideByZeroError { .. })
-        ));
-        assert_eq!(
-            Uint512::from(6u32).checked_div_euclid(Uint512::from(2u32)),
-            Ok(Uint512::from(3u32)),
-        );
-        assert_eq!(
-            Uint512::from(7u32).checked_div_euclid(Uint512::from(2u32)),
-            Ok(Uint512::from(3u32)),
-        );
-        assert!(matches!(
             Uint512::MAX.checked_rem(Uint512::from(0u32)),
             Err(DivideByZeroError { .. })
         ));
@@ -1209,11 +1056,6 @@ mod tests {
             Uint512::MAX.saturating_mul(Uint512::from(2u32)),
             Uint512::MAX
         );
-        assert_eq!(
-            Uint512::from(4u32).saturating_pow(2u32),
-            Uint512::from(16u32)
-        );
-        assert_eq!(Uint512::MAX.saturating_pow(2u32), Uint512::MAX);
     }
 
     #[test]
@@ -1272,31 +1114,5 @@ mod tests {
         let b = Uint512::from(6u32);
         a %= &b;
         assert_eq!(a, Uint512::from(1u32));
-    }
-
-    #[test]
-    fn uint512_abs_diff_works() {
-        let a = Uint512::from(42u32);
-        let b = Uint512::from(5u32);
-        let expected = Uint512::from(37u32);
-        assert_eq!(a.abs_diff(b), expected);
-        assert_eq!(b.abs_diff(a), expected);
-    }
-
-    #[test]
-    fn uint512_partial_eq() {
-        let test_cases = [(1, 1, true), (42, 42, true), (42, 24, false), (0, 0, true)]
-            .into_iter()
-            .map(|(lhs, rhs, expected): (u64, u64, bool)| {
-                (Uint512::from(lhs), Uint512::from(rhs), expected)
-            });
-
-        #[allow(clippy::op_ref)]
-        for (lhs, rhs, expected) in test_cases {
-            assert_eq!(lhs == rhs, expected);
-            assert_eq!(&lhs == rhs, expected);
-            assert_eq!(lhs == &rhs, expected);
-            assert_eq!(&lhs == &rhs, expected);
-        }
     }
 }

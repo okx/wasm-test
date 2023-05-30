@@ -5,8 +5,7 @@ use tempfile::TempDir;
 use cosmwasm_std::{coins, Empty};
 use cosmwasm_vm::testing::{mock_backend, mock_env, mock_info, MockApi, MockQuerier, MockStorage};
 use cosmwasm_vm::{
-    call_execute, call_instantiate, capabilities_from_csv, Cache, CacheOptions, InstanceOptions,
-    Size,
+    call_execute, call_instantiate, features_from_csv, Cache, CacheOptions, InstanceOptions, Size,
 };
 
 // Instance
@@ -28,7 +27,7 @@ const THREADS: usize = SAVE_WASM_THREADS + INSTANTIATION_THREADS;
 pub fn main() {
     let options = CacheOptions {
         base_dir: TempDir::new().unwrap().into_path(),
-        available_capabilities: capabilities_from_csv("iterator,staking"),
+        supported_features: features_from_csv("iterator,staking"),
         memory_cache_size: MEMORY_CACHE_SIZE,
         instance_memory_limit: DEFAULT_MEMORY_LIMIT,
     };
@@ -47,7 +46,7 @@ pub fn main() {
             println!("Done saving Wasm {}", checksum);
         }));
     }
-    for i in 0..INSTANTIATION_THREADS {
+    for _ in 0..INSTANTIATION_THREADS {
         let cache = Arc::clone(&cache);
 
         threads.push(thread::spawn(move || {
@@ -55,7 +54,7 @@ pub fn main() {
             let mut instance = cache
                 .get_instance(&checksum, mock_backend(&[]), DEFAULT_INSTANCE_OPTIONS)
                 .unwrap();
-            println!("Done instantiating contract {i}");
+            println!("Done instantiating contract");
 
             let info = mock_info("creator", &coins(1000, "earth"));
             let msg = br#"{"verifier": "verifies", "beneficiary": "benefits"}"#;
@@ -74,7 +73,7 @@ pub fn main() {
     threads.into_iter().for_each(|thread| {
         thread
             .join()
-            .expect("The threaded instantiation or execution failed !")
+            .expect("The thread creating or execution failed !")
     });
 
     assert_eq!(cache.stats().misses, 0);

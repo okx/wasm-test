@@ -1,12 +1,12 @@
 use std::collections::HashMap;
-use wasmer::{Engine, Module};
+use wasmer::Module;
 
-use super::cached_module::CachedModule;
+use super::sized_module::SizedModule;
 use crate::{Checksum, VmResult};
 
 /// An pinned in memory module cache
 pub struct PinnedMemoryCache {
-    modules: HashMap<Checksum, CachedModule>,
+    modules: HashMap<Checksum, SizedModule>,
 }
 
 impl PinnedMemoryCache {
@@ -17,20 +17,8 @@ impl PinnedMemoryCache {
         }
     }
 
-    pub fn store(
-        &mut self,
-        checksum: &Checksum,
-        element: (Engine, Module),
-        size: usize,
-    ) -> VmResult<()> {
-        self.modules.insert(
-            *checksum,
-            CachedModule {
-                engine: element.0,
-                module: element.1,
-                size,
-            },
-        );
+    pub fn store(&mut self, checksum: &Checksum, module: Module, size: usize) -> VmResult<()> {
+        self.modules.insert(*checksum, SizedModule { module, size });
         Ok(())
     }
 
@@ -42,9 +30,9 @@ impl PinnedMemoryCache {
     }
 
     /// Looks up a module in the cache and creates a new module
-    pub fn load(&mut self, checksum: &Checksum) -> VmResult<Option<CachedModule>> {
+    pub fn load(&mut self, checksum: &Checksum) -> VmResult<Option<Module>> {
         match self.modules.get(checksum) {
-            Some(cached) => Ok(Some(cached.clone())),
+            Some(module) => Ok(Some(module.module.clone())),
             None => Ok(None),
         }
     }
@@ -64,14 +52,14 @@ impl PinnedMemoryCache {
     /// This is based on the values provided with `store`. No actual
     /// memory size is measured here.
     pub fn size(&self) -> usize {
-        self.modules.values().map(|module| module.size).sum()
+        self.modules.iter().map(|(_, module)| module.size).sum()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wasm_backend::{compile, make_store_with_engine};
+    use crate::wasm_backend::compile;
     use wasmer::{imports, Instance as WasmerInstance};
     use wasmer_middlewares::metering::set_remaining_points;
 
@@ -99,31 +87,29 @@ mod tests {
         assert!(cache_entry.is_none());
 
         // Compile module
-        let (engine, original) = compile(&wasm, &[]).unwrap();
-        let mut store = make_store_with_engine(engine.clone(), None);
+        let original = compile(&wasm, None, &[]).unwrap();
 
         // Ensure original module can be executed
         {
-            let instance = WasmerInstance::new(&mut store, &original, &imports! {}).unwrap();
-            set_remaining_points(&mut store, &instance, TESTING_GAS_LIMIT);
+            let instance = WasmerInstance::new(&original, &imports! {}).unwrap();
+            set_remaining_points(&instance, TESTING_GAS_LIMIT);
             let add_one = instance.exports.get_function("add_one").unwrap();
-            let result = add_one.call(&mut store, &[42.into()]).unwrap();
+            let result = add_one.call(&[42.into()]).unwrap();
             assert_eq!(result[0].unwrap_i32(), 43);
         }
 
         // Store module
-        cache.store(&checksum, (engine, original), 0).unwrap();
+        cache.store(&checksum, original, 0).unwrap();
 
         // Load module
         let cached = cache.load(&checksum).unwrap().unwrap();
-        let mut store = make_store_with_engine(cached.engine, None);
 
         // Ensure cached module can be executed
         {
-            let instance = WasmerInstance::new(&mut store, &cached.module, &imports! {}).unwrap();
-            set_remaining_points(&mut store, &instance, TESTING_GAS_LIMIT);
+            let instance = WasmerInstance::new(&cached, &imports! {}).unwrap();
+            set_remaining_points(&instance, TESTING_GAS_LIMIT);
             let add_one = instance.exports.get_function("add_one").unwrap();
-            let result = add_one.call(&mut store, &[42.into()]).unwrap();
+            let result = add_one.call(&[42.into()]).unwrap();
             assert_eq!(result[0].unwrap_i32(), 43);
         }
     }
@@ -148,8 +134,8 @@ mod tests {
         assert!(!cache.has(&checksum));
 
         // Add
-        let (engine, original) = compile(&wasm, &[]).unwrap();
-        cache.store(&checksum, (engine, original), 0).unwrap();
+        let original = compile(&wasm, None, &[]).unwrap();
+        cache.store(&checksum, original, 0).unwrap();
 
         assert!(cache.has(&checksum));
 
@@ -179,8 +165,8 @@ mod tests {
         assert_eq!(cache.len(), 0);
 
         // Add
-        let (engine, original) = compile(&wasm, &[]).unwrap();
-        cache.store(&checksum, (engine, original), 0).unwrap();
+        let original = compile(&wasm, None, &[]).unwrap();
+        cache.store(&checksum, original, 0).unwrap();
 
         assert_eq!(cache.len(), 1);
 
@@ -221,15 +207,13 @@ mod tests {
         assert_eq!(cache.size(), 0);
 
         // Add 1
-        cache
-            .store(&checksum1, compile(&wasm1, &[]).unwrap(), 500)
-            .unwrap();
+        let original = compile(&wasm1, None, &[]).unwrap();
+        cache.store(&checksum1, original, 500).unwrap();
         assert_eq!(cache.size(), 500);
 
         // Add 2
-        cache
-            .store(&checksum2, compile(&wasm2, &[]).unwrap(), 300)
-            .unwrap();
+        let original = compile(&wasm2, None, &[]).unwrap();
+        cache.store(&checksum2, original, 300).unwrap();
         assert_eq!(cache.size(), 800);
 
         // Remove 1

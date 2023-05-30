@@ -54,12 +54,6 @@ pub enum StdError {
         #[cfg(feature = "backtraces")]
         backtrace: Backtrace,
     },
-    #[error("Invalid hex string: {msg}")]
-    InvalidHex {
-        msg: String,
-        #[cfg(feature = "backtraces")]
-        backtrace: Backtrace,
-    },
     /// Whenever UTF-8 bytes cannot be decoded into a unicode string, e.g. in String::from_utf8 or str::from_utf8.
     #[error("Cannot decode UTF8 bytes into string: {msg}")]
     InvalidUtf8 {
@@ -148,14 +142,6 @@ impl StdError {
             // Cast is safe because usize is 32 or 64 bit large in all environments we support
             expected: expected as u64,
             actual: actual as u64,
-            #[cfg(feature = "backtraces")]
-            backtrace: Backtrace::capture(),
-        }
-    }
-
-    pub fn invalid_hex(msg: impl ToString) -> Self {
-        StdError::InvalidHex {
-            msg: msg.to_string(),
             #[cfg(feature = "backtraces")]
             backtrace: Backtrace::capture(),
         }
@@ -293,22 +279,6 @@ impl PartialEq<StdError> for StdError {
                 } = rhs
                 {
                     expected == rhs_expected && actual == rhs_actual
-                } else {
-                    false
-                }
-            }
-            StdError::InvalidHex {
-                msg,
-                #[cfg(feature = "backtraces")]
-                    backtrace: _,
-            } => {
-                if let StdError::InvalidHex {
-                    msg: rhs_msg,
-                    #[cfg(feature = "backtraces")]
-                        backtrace: _,
-                } = rhs
-                {
-                    msg == rhs_msg
                 } else {
                     false
                 }
@@ -543,7 +513,7 @@ impl ConversionOverflowError {
 }
 
 #[derive(Error, Debug, PartialEq, Eq)]
-#[error("Cannot divide {operand} by zero")]
+#[error("Cannot devide {operand} by zero")]
 pub struct DivideByZeroError {
     pub operand: String,
 }
@@ -554,18 +524,6 @@ impl DivideByZeroError {
             operand: operand.to_string(),
         }
     }
-}
-
-#[derive(Error, Debug, PartialEq, Eq)]
-pub enum CheckedMultiplyFractionError {
-    #[error("{0}")]
-    DivideByZero(#[from] DivideByZeroError),
-
-    #[error("{0}")]
-    ConversionOverflow(#[from] ConversionOverflowError),
-
-    #[error("{0}")]
-    Overflow(#[from] OverflowError),
 }
 
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -584,32 +542,6 @@ pub enum CheckedFromRatioError {
 
     #[error("Overflow")]
     Overflow,
-}
-
-#[derive(Error, Debug, PartialEq, Eq)]
-#[error("Round up operation failed because of overflow")]
-pub struct RoundUpOverflowError;
-
-#[derive(Error, Debug, PartialEq, Eq)]
-pub enum CoinFromStrError {
-    #[error("Missing denominator")]
-    MissingDenom,
-    #[error("Missing amount or non-digit characters in amount")]
-    MissingAmount,
-    #[error("Invalid amount: {0}")]
-    InvalidAmount(std::num::ParseIntError),
-}
-
-impl From<std::num::ParseIntError> for CoinFromStrError {
-    fn from(value: std::num::ParseIntError) -> Self {
-        Self::InvalidAmount(value)
-    }
-}
-
-impl From<CoinFromStrError> for StdError {
-    fn from(value: CoinFromStrError) -> Self {
-        Self::generic_err(format!("Parsing Coin: {}", value))
-    }
 }
 
 #[cfg(test)]
@@ -674,29 +606,6 @@ mod tests {
             } => {
                 assert_eq!(expected, 31);
                 assert_eq!(actual, 14);
-            }
-            _ => panic!("expect different error"),
-        }
-    }
-
-    #[test]
-    fn invalid_hex_works_for_strings() {
-        let error = StdError::invalid_hex("my text");
-        match error {
-            StdError::InvalidHex { msg, .. } => {
-                assert_eq!(msg, "my text");
-            }
-            _ => panic!("expect different error"),
-        }
-    }
-
-    #[test]
-    fn invalid_hex_works_for_errors() {
-        let original = hex::FromHexError::OddLength;
-        let error = StdError::invalid_hex(original);
-        match error {
-            StdError::InvalidHex { msg, .. } => {
-                assert_eq!(msg, "Odd number of digits");
             }
             _ => panic!("expect different error"),
         }

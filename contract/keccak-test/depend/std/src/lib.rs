@@ -1,23 +1,19 @@
-#![cfg_attr(feature = "backtraces", feature(error_generic_member_access))]
-#![cfg_attr(feature = "backtraces", feature(provide_any))]
+#![cfg_attr(feature = "backtraces", feature(backtrace))]
 
 // Exposed on all platforms
 
 mod addresses;
 mod assertions;
 mod binary;
-mod coin;
+mod coins;
 mod conversion;
 mod deps;
 mod errors;
-mod forward_ref;
-mod hex_binary;
 mod ibc;
 mod import_helpers;
 #[cfg(feature = "iterator")]
 mod iterator;
 mod math;
-mod never;
 mod panic;
 mod query;
 mod results;
@@ -28,21 +24,15 @@ mod timestamp;
 mod traits;
 mod types;
 
-// This modules is very advanced and will not be used directly by the vast majority of users.
-// We want to offer it to ensure a stable storage key composition system but don't encourage
-// contract devs to use it directly.
-pub mod storage_keys;
-
-pub use crate::addresses::{instantiate2_address, Addr, CanonicalAddr, Instantiate2AddressError};
+pub use crate::addresses::{Addr, CanonicalAddr};
 pub use crate::binary::Binary;
-pub use crate::coin::{coin, coins, has_coins, Coin};
+pub use crate::coins::{coin, coins, has_coins, Coin};
 pub use crate::deps::{Deps, DepsMut, OwnedDeps};
 pub use crate::errors::{
-    CheckedFromRatioError, CheckedMultiplyFractionError, CheckedMultiplyRatioError,
-    ConversionOverflowError, DivideByZeroError, OverflowError, OverflowOperation,
-    RecoverPubkeyError, StdError, StdResult, SystemError, VerificationError,
+    CheckedFromRatioError, CheckedMultiplyRatioError, ConversionOverflowError, DivideByZeroError,
+    OverflowError, OverflowOperation, RecoverPubkeyError, StdError, StdResult, SystemError,
+    VerificationError,
 };
-pub use crate::hex_binary::HexBinary;
 #[cfg(feature = "stargate")]
 pub use crate::ibc::{
     Ibc3ChannelOpenResponse, IbcAcknowledgement, IbcBasicResponse, IbcChannel, IbcChannelCloseMsg,
@@ -56,11 +46,6 @@ pub use crate::math::{
     Decimal, Decimal256, Decimal256RangeExceeded, DecimalRangeExceeded, Fraction, Isqrt, Uint128,
     Uint256, Uint512, Uint64,
 };
-pub use crate::never::Never;
-#[cfg(feature = "cosmwasm_1_2")]
-pub use crate::query::CodeInfoResponse;
-#[cfg(feature = "cosmwasm_1_1")]
-pub use crate::query::SupplyResponse;
 pub use crate::query::{
     AllBalanceResponse, BalanceResponse, BankQuery, ContractInfoResponse, CustomQuery,
     QueryRequest, WasmQuery,
@@ -74,8 +59,6 @@ pub use crate::query::{
 pub use crate::query::{ChannelResponse, IbcQuery, ListChannelsResponse, PortIdResponse};
 #[allow(deprecated)]
 pub use crate::results::SubMsgExecutionResponse;
-#[cfg(all(feature = "stargate", feature = "cosmwasm_1_2"))]
-pub use crate::results::WeightedVoteOption;
 pub use crate::results::{
     attr, wasm_execute, wasm_instantiate, Attribute, BankMsg, ContractResult, CosmosMsg, CustomMsg,
     Empty, Event, QueryResponse, Reply, ReplyOn, Response, SubMsg, SubMsgResponse, SubMsgResult,
@@ -112,8 +95,27 @@ pub use crate::imports::{ExternalApi, ExternalQuerier, ExternalStorage};
 
 // Exposed for testing only
 // Both unit tests and integration tests are compiled to native code, so everything in here does not need to compile to Wasm.
+
 #[cfg(not(target_arch = "wasm32"))]
-pub mod testing;
+mod mock;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod testing {
+    #[cfg(feature = "staking")]
+    pub use crate::mock::StakingQuerier;
+    pub use crate::mock::{
+        digit_sum, mock_dependencies, mock_dependencies_with_balance,
+        mock_dependencies_with_balances, mock_env, mock_info, mock_wasmd_attr, riffle_shuffle,
+        BankQuerier, MockApi, MockQuerier, MockQuerierCustomHandlerResult, MockStorage,
+        MOCK_CONTRACT_ADDR,
+    };
+    #[cfg(feature = "stargate")]
+    pub use crate::mock::{
+        mock_ibc_channel, mock_ibc_channel_close_confirm, mock_ibc_channel_close_init,
+        mock_ibc_channel_connect_ack, mock_ibc_channel_connect_confirm, mock_ibc_channel_open_init,
+        mock_ibc_channel_open_try, mock_ibc_packet_ack, mock_ibc_packet_recv,
+        mock_ibc_packet_timeout,
+    };
+}
 
 // Re-exports
 

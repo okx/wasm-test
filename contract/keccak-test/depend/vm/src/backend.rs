@@ -10,7 +10,7 @@ use cosmwasm_std::{Order, Record};
 /// A structure that represents gas cost to be deducted from the remaining gas.
 /// This is always needed when computations are performed outside of
 /// Wasm execution, such as calling crypto APIs or calls into the blockchain.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct GasInfo {
     /// The gas cost of a computation that was executed already but not yet charged.
     ///
@@ -157,7 +157,7 @@ pub trait Querier {
 /// attached.
 pub type BackendResult<T> = (core::result::Result<T, BackendError>, GasInfo);
 
-#[derive(Error, Debug, PartialEq, Eq)]
+#[derive(Error, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum BackendError {
     #[error("Panic in FFI call")]

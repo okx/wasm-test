@@ -9,8 +9,7 @@ use crate::errors::{StdError, StdResult};
 /// Binary is a wrapper around Vec<u8> to add base64 de/serialization
 /// with serde. It also adds some helper methods to help encode inline.
 ///
-/// This is only needed as serde-json-{core,wasm} has a horrible encoding for Vec<u8>.
-/// See also <https://github.com/CosmWasm/cosmwasm/blob/main/docs/MESSAGE_TYPES.md>.
+/// This is only needed as serde-json-{core,wasm} has a horrible encoding for Vec<u8>
 #[derive(Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord, JsonSchema)]
 pub struct Binary(#[schemars(with = "String")] pub Vec<u8>);
 
@@ -18,7 +17,7 @@ impl Binary {
     /// take an (untrusted) string and decode it into bytes.
     /// fails if it is not valid base64
     pub fn from_base64(encoded: &str) -> StdResult<Self> {
-        let binary = base64::decode(encoded).map_err(StdError::invalid_base64)?;
+        let binary = base64::decode(&encoded).map_err(StdError::invalid_base64)?;
         Ok(Binary(binary))
     }
 
@@ -33,6 +32,12 @@ impl Binary {
     }
 
     /// Copies content into fixed-sized array.
+    /// The result type `A: ByteArray` is a workaround for
+    /// the missing [const-generics](https://rust-lang.github.io/rfcs/2000-const-generics.html).
+    /// `A` is a fixed-sized array like `[u8; 8]`.
+    ///
+    /// ByteArray is implemented for `[u8; 0]` to `[u8; 64]`, such that
+    /// we are limited to 64 bytes for now.
     ///
     /// # Examples
     ///
@@ -83,6 +88,12 @@ impl fmt::Debug for Binary {
     }
 }
 
+impl From<&[u8]> for Binary {
+    fn from(binary: &[u8]) -> Self {
+        Self(binary.to_vec())
+    }
+}
+
 /// Just like Vec<u8>, Binary is a smart pointer to [u8].
 /// This implements `*binary` for us and allows us to
 /// do `&*binary`, returning a `&[u8]` from a `&Binary`.
@@ -96,27 +107,14 @@ impl Deref for Binary {
     }
 }
 
-impl AsRef<[u8]> for Binary {
-    fn as_ref(&self) -> &[u8] {
-        self.as_slice()
-    }
-}
-
-// Slice
-impl From<&[u8]> for Binary {
-    fn from(binary: &[u8]) -> Self {
-        Self(binary.to_vec())
-    }
-}
-
-// Array reference
+// Reference
 impl<const LENGTH: usize> From<&[u8; LENGTH]> for Binary {
     fn from(source: &[u8; LENGTH]) -> Self {
         Self(source.to_vec())
     }
 }
 
-// Owned array
+// Owned
 impl<const LENGTH: usize> From<[u8; LENGTH]> for Binary {
     fn from(source: [u8; LENGTH]) -> Self {
         Self(source.into())
@@ -164,34 +162,6 @@ impl PartialEq<Binary> for &[u8] {
     fn eq(&self, rhs: &Binary) -> bool {
         // Use &[u8] == &[u8]
         *self == rhs.as_slice()
-    }
-}
-
-/// Implement `Binary == &[u8; LENGTH]`
-impl<const LENGTH: usize> PartialEq<&[u8; LENGTH]> for Binary {
-    fn eq(&self, rhs: &&[u8; LENGTH]) -> bool {
-        self.as_slice() == rhs.as_slice()
-    }
-}
-
-/// Implement `&[u8; LENGTH] == Binary`
-impl<const LENGTH: usize> PartialEq<Binary> for &[u8; LENGTH] {
-    fn eq(&self, rhs: &Binary) -> bool {
-        self.as_slice() == rhs.as_slice()
-    }
-}
-
-/// Implement `Binary == [u8; LENGTH]`
-impl<const LENGTH: usize> PartialEq<[u8; LENGTH]> for Binary {
-    fn eq(&self, rhs: &[u8; LENGTH]) -> bool {
-        self.as_slice() == rhs.as_slice()
-    }
-}
-
-/// Implement `[u8; LENGTH] == Binary`
-impl<const LENGTH: usize> PartialEq<Binary> for [u8; LENGTH] {
-    fn eq(&self, rhs: &Binary) -> bool {
-        self.as_slice() == rhs.as_slice()
     }
 }
 
@@ -420,7 +390,8 @@ mod tests {
         let a: Binary = b"................................".into();
         assert_eq!(a.len(), 32);
 
-        let a: Binary = b".................................".into();
+        // for length > 32 we need to cast
+        let a: Binary = (b"................................." as &[u8]).into();
         assert_eq!(a.len(), 33);
     }
 
@@ -504,34 +475,6 @@ mod tests {
     }
 
     #[test]
-    fn binary_implements_as_ref() {
-        // Can use as_ref (this we already get via the Deref implementation)
-        let data = Binary(vec![7u8, 35, 49, 101, 0, 255]);
-        assert_eq!(data.as_ref(), &[7u8, 35, 49, 101, 0, 255]);
-
-        let data = Binary(vec![7u8, 35, 49, 101, 0, 255]);
-        let data_ref = &data;
-        assert_eq!(data_ref.as_ref(), &[7u8, 35, 49, 101, 0, 255]);
-
-        // Implements as ref
-
-        // This is a dummy function to mimic the signature of
-        // https://docs.rs/sha2/0.10.6/sha2/trait.Digest.html#tymethod.digest
-        fn hash(data: impl AsRef<[u8]>) -> u64 {
-            let mut hasher = DefaultHasher::new();
-            data.as_ref().hash(&mut hasher);
-            hasher.finish()
-        }
-
-        let data = Binary(vec![7u8, 35, 49, 101, 0, 255]);
-        hash(data);
-
-        let data = Binary(vec![7u8, 35, 49, 101, 0, 255]);
-        let data_ref = &data;
-        hash(data_ref);
-    }
-
-    #[test]
     fn binary_implements_hash() {
         let a1 = Binary::from([0, 187, 61, 11, 250, 0]);
         let mut hasher = DefaultHasher::new();
@@ -582,25 +525,11 @@ mod tests {
     }
 
     #[test]
-    fn binary_implements_partial_eq_with_slice_and_array() {
+    fn binary_implements_partial_eq_with_slice() {
         let a = Binary(vec![0xAA, 0xBB]);
-
-        // Slice: &[u8]
         assert_eq!(a, b"\xAA\xBB" as &[u8]);
         assert_eq!(b"\xAA\xBB" as &[u8], a);
         assert_ne!(a, b"\x11\x22" as &[u8]);
         assert_ne!(b"\x11\x22" as &[u8], a);
-
-        // Array reference: &[u8; 2]
-        assert_eq!(a, b"\xAA\xBB");
-        assert_eq!(b"\xAA\xBB", a);
-        assert_ne!(a, b"\x11\x22");
-        assert_ne!(b"\x11\x22", a);
-
-        // Array: [u8; 2]
-        assert_eq!(a, [0xAA, 0xBB]);
-        assert_eq!([0xAA, 0xBB], a);
-        assert_ne!(a, [0x11, 0x22]);
-        assert_ne!([0x11, 0x22], a);
     }
 }

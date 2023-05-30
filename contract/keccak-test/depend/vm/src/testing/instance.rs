@@ -4,8 +4,8 @@
 use cosmwasm_std::Coin;
 use std::collections::HashSet;
 
-use crate::capabilities::capabilities_from_csv;
 use crate::compatibility::check_wasm;
+use crate::features::features_from_csv;
 use crate::instance::{Instance, InstanceOptions};
 use crate::size::Size;
 use crate::{Backend, BackendApi, Querier, Storage};
@@ -62,8 +62,6 @@ pub fn mock_instance_with_balances(
     )
 }
 
-/// Creates an instance from the given Wasm bytecode.
-/// The gas limit is measured in [CosmWasm gas](https://github.com/CosmWasm/cosmwasm/blob/main/docs/GAS.md).
 pub fn mock_instance_with_gas_limit(
     wasm: &[u8],
     gas_limit: u64,
@@ -87,8 +85,7 @@ pub struct MockInstanceOptions<'a> {
     pub backend_error: Option<&'static str>,
 
     // instance
-    pub available_capabilities: HashSet<String>,
-    /// Gas limit measured in [CosmWasm gas](https://github.com/CosmWasm/cosmwasm/blob/main/docs/GAS.md).
+    pub supported_features: HashSet<String>,
     pub gas_limit: u64,
     pub print_debug: bool,
     /// Memory limit in bytes. Use a value that is divisible by the Wasm page size 65536, e.g. full MiBs.
@@ -96,9 +93,9 @@ pub struct MockInstanceOptions<'a> {
 }
 
 impl MockInstanceOptions<'_> {
-    fn default_capabilities() -> HashSet<String> {
+    fn default_features() -> HashSet<String> {
         #[allow(unused_mut)]
-        let mut out = capabilities_from_csv("iterator,staking,cosmwasm_1_1,cosmwasm_1_2");
+        let mut out = features_from_csv("iterator,staking");
         #[cfg(feature = "stargate")]
         out.insert("stargate".to_string());
         out
@@ -114,7 +111,7 @@ impl Default for MockInstanceOptions<'_> {
             backend_error: None,
 
             // instance
-            available_capabilities: Self::default_capabilities(),
+            supported_features: Self::default_features(),
             gas_limit: DEFAULT_GAS_LIMIT,
             print_debug: DEFAULT_PRINT_DEBUG,
             memory_limit: DEFAULT_MEMORY_LIMIT,
@@ -126,7 +123,7 @@ pub fn mock_instance_with_options(
     wasm: &[u8],
     options: MockInstanceOptions,
 ) -> Instance<MockApi, MockStorage, MockQuerier> {
-    check_wasm(wasm, &options.available_capabilities).unwrap();
+    check_wasm(wasm, &options.supported_features).unwrap();
     let contract_address = MOCK_CONTRACT_ADDR;
 
     // merge balances

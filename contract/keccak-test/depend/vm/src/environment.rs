@@ -1,23 +1,13 @@
 //! Internal details to be used by instance.rs only
 use std::borrow::{Borrow, BorrowMut};
-use std::marker::PhantomData;
 use std::ptr::NonNull;
-use std::rc::Rc;
 use std::sync::{Arc, RwLock};
 
-use derivative::Derivative;
-use wasmer::{AsStoreMut, Instance as WasmerInstance, Memory, MemoryView, Value};
+use wasmer::{HostEnvInitError, Instance as WasmerInstance, Memory, Val, WasmerEnv};
 use wasmer_middlewares::metering::{get_remaining_points, set_remaining_points, MeteringPoints};
 
 use crate::backend::{BackendApi, GasInfo, Querier, Storage};
 use crate::errors::{VmError, VmResult};
-
-/// Keep this as low as necessary to avoid deepy nested errors like this:
-///
-/// ```plain
-/// RuntimeErr { msg: "Wasmer runtime error: RuntimeError: Error executing Wasm: Wasmer runtime error: RuntimeError: Error executing Wasm: Wasmer runtime error: RuntimeError: Error executing Wasm: Wasmer runtime error: RuntimeError: Error executing Wasm: Wasmer runtime error: RuntimeError: Maximum call depth exceeded." }
-/// ```
-const MAX_CALL_DEPTH: usize = 2;
 
 /// Never can never be instantiated.
 /// Replace this with the [never primitive type](https://doc.rust-lang.org/std/primitive.never.html) when stable.
@@ -26,7 +16,7 @@ pub enum Never {}
 
 /** gas config data */
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct GasConfig {
     /// Gas costs of VM (not Backend) provided functionality
     /// secp256k1 signature verification cost
@@ -39,8 +29,6 @@ pub struct GasConfig {
     pub ed25519_batch_verify_cost: u64,
     /// ed25519 batch signature verification cost (single public key)
     pub ed25519_batch_verify_one_pubkey_cost: u64,
-    /// keccak256 hash cost
-    pub keccak256_cost: u64,
 }
 
 impl Default for GasConfig {
@@ -58,19 +46,16 @@ impl Default for GasConfig {
             // From https://docs.rs/ed25519-zebra/2.2.0/ed25519_zebra/batch/index.html
             ed25519_batch_verify_cost: 63 * GAS_PER_US / 2,
             ed25519_batch_verify_one_pubkey_cost: 63 * GAS_PER_US / 4,
-            keccak256_cost: 64 * GAS_PER_US,
         }
     }
 }
 
 /** context data **/
 
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, PartialEq, Debug, Default)]
 pub struct GasState {
     /// Gas limit for the computation, including internally and externally used gas.
     /// This is set when the Environment is created and never mutated.
-    ///
-    /// Measured in [CosmWasm gas](https://github.com/CosmWasm/cosmwasm/blob/main/docs/GAS.md).
     pub gas_limit: u64,
     /// Tracking the gas used in the Cosmos SDK, in CosmWasm gas units.
     pub externally_used_gas: u64,
@@ -85,35 +70,11 @@ impl GasState {
     }
 }
 
-/// Additional environmental information in a debug call.
-///
-/// The currently unused lifetime parameter 'a allows accessing referenced data in the debug implementation
-/// without cloning it.
-#[derive(Derivative)]
-#[derivative(Debug)]
-#[non_exhaustive]
-pub struct DebugInfo<'a> {
-    pub gas_remaining: u64,
-    // This field is just to allow us to add the unused lifetime parameter. It can be removed
-    // at any time.
-    #[doc(hidden)]
-    #[derivative(Debug = "ignore")]
-    pub(crate) __lifetime: PhantomData<&'a ()>,
-}
-
-// Unfortunately we cannot create an alias for the trait (https://github.com/rust-lang/rust/issues/41517).
-// So we need to copy it in a few places.
-//
-//                            /- BEGIN TRAIT                   END TRAIT \
-//                            |                                          |
-//                            v                                          v
-pub type DebugHandlerFn = dyn for<'a> Fn(/* msg */ &'a str, DebugInfo<'a>);
-
 /// A environment that provides access to the ContextData.
 /// The environment is clonable but clones access the same underlying data.
-pub struct Environment<A, S, Q> {
-    pub memory: Option<Memory>,
+pub struct Environment<A: BackendApi, S: Storage, Q: Querier> {
     pub api: A,
+    pub print_debug: bool,
     pub gas_config: GasConfig,
     data: Arc<RwLock<ContextData<S, Q>>>,
 }
@@ -125,35 +86,28 @@ unsafe impl<A: BackendApi, S: Storage, Q: Querier> Sync for Environment<A, S, Q>
 impl<A: BackendApi, S: Storage, Q: Querier> Clone for Environment<A, S, Q> {
     fn clone(&self) -> Self {
         Environment {
-            memory: None,
             api: self.api,
+            print_debug: self.print_debug,
             gas_config: self.gas_config.clone(),
             data: self.data.clone(),
         }
     }
 }
 
+impl<A: BackendApi, S: Storage, Q: Querier> WasmerEnv for Environment<A, S, Q> {
+    fn init_with_instance(&mut self, _instance: &WasmerInstance) -> Result<(), HostEnvInitError> {
+        Ok(())
+    }
+}
+
 impl<A: BackendApi, S: Storage, Q: Querier> Environment<A, S, Q> {
-    pub fn new(api: A, gas_limit: u64) -> Self {
+    pub fn new(api: A, gas_limit: u64, print_debug: bool) -> Self {
         Environment {
-            memory: None,
             api,
+            print_debug,
             gas_config: GasConfig::default(),
             data: Arc::new(RwLock::new(ContextData::new(gas_limit))),
         }
-    }
-
-    pub fn set_debug_handler(&self, debug_handler: Option<Rc<DebugHandlerFn>>) {
-        self.with_context_data_mut(|context_data| {
-            context_data.debug_handler = debug_handler;
-        })
-    }
-
-    pub fn debug_handler(&self) -> Option<Rc<DebugHandlerFn>> {
-        self.with_context_data(|context_data| {
-            // This clone here requires us to wrap the function in Rc instead of Box
-            context_data.debug_handler.clone()
-        })
     }
 
     fn with_context_data_mut<C, R>(&self, callback: C) -> R
@@ -205,39 +159,26 @@ impl<A: BackendApi, S: Storage, Q: Querier> Environment<A, S, Q> {
     /// The number of return values is variable and controlled by the guest.
     /// Usually we expect 0 or 1 return values. Use [`Self::call_function0`]
     /// or [`Self::call_function1`] to ensure the number of return values is checked.
-    fn call_function(
-        &self,
-        store: &mut impl AsStoreMut,
-        name: &str,
-        args: &[Value],
-    ) -> VmResult<Box<[Value]>> {
+    fn call_function(&self, name: &str, args: &[Val]) -> VmResult<Box<[Val]>> {
         // Clone function before calling it to avoid dead locks
         let func = self.with_wasmer_instance(|instance| {
             let func = instance.exports.get_function(name)?;
             Ok(func.clone())
         })?;
-        self.increment_call_depth()?;
-        let res = func.call(store, args).map_err(|runtime_err| -> VmError {
+        func.call(args).map_err(|runtime_err| -> VmError {
             self.with_wasmer_instance::<_, Never>(|instance| {
-                let err: VmError = match get_remaining_points(store, instance) {
+                let err: VmError = match get_remaining_points(instance) {
                     MeteringPoints::Remaining(_) => VmError::from(runtime_err),
                     MeteringPoints::Exhausted => VmError::gas_depletion(),
                 };
                 Err(err)
             })
             .unwrap_err() // with_wasmer_instance can only succeed if the callback succeeds
-        });
-        self.decrement_call_depth();
-        res
+        })
     }
 
-    pub fn call_function0(
-        &self,
-        store: &mut impl AsStoreMut,
-        name: &str,
-        args: &[Value],
-    ) -> VmResult<()> {
-        let result = self.call_function(store, name, args)?;
+    pub fn call_function0(&self, name: &str, args: &[Val]) -> VmResult<()> {
+        let result = self.call_function(name, args)?;
         let expected = 0;
         let actual = result.len();
         if actual != expected {
@@ -246,13 +187,8 @@ impl<A: BackendApi, S: Storage, Q: Querier> Environment<A, S, Q> {
         Ok(())
     }
 
-    pub fn call_function1(
-        &self,
-        store: &mut impl AsStoreMut,
-        name: &str,
-        args: &[Value],
-    ) -> VmResult<Value> {
-        let result = self.call_function(store, name, args)?;
+    pub fn call_function1(&self, name: &str, args: &[Val]) -> VmResult<Val> {
+        let result = self.call_function(name, args)?;
         let expected = 1;
         let actual = result.len();
         if actual != expected {
@@ -299,34 +235,9 @@ impl<A: BackendApi, S: Storage, Q: Querier> Environment<A, S, Q> {
         })
     }
 
-    /// Increments the call depth by 1 and returns the new value
-    pub fn increment_call_depth(&self) -> VmResult<usize> {
-        let new = self.with_context_data_mut(|context_data| {
-            let new = context_data.call_depth + 1;
-            context_data.call_depth = new;
-            new
-        });
-        if new > MAX_CALL_DEPTH {
-            return Err(VmError::max_call_depth_exceeded());
-        }
-        Ok(new)
-    }
-
-    /// Decrements the call depth by 1 and returns the new value
-    pub fn decrement_call_depth(&self) -> usize {
-        self.with_context_data_mut(|context_data| {
-            let new = context_data
-                .call_depth
-                .checked_sub(1)
-                .expect("Call depth < 0. This is a bug.");
-            context_data.call_depth = new;
-            new
-        })
-    }
-
-    pub fn get_gas_left(&self, store: &mut impl AsStoreMut) -> u64 {
+    pub fn get_gas_left(&self) -> u64 {
         self.with_wasmer_instance(|instance| {
-            Ok(match get_remaining_points(store, instance) {
+            Ok(match get_remaining_points(instance) {
                 MeteringPoints::Remaining(count) => count,
                 MeteringPoints::Exhausted => 0,
             })
@@ -334,9 +245,9 @@ impl<A: BackendApi, S: Storage, Q: Querier> Environment<A, S, Q> {
         .expect("Wasmer instance is not set. This is a bug in the lifecycle.")
     }
 
-    pub fn set_gas_left(&self, store: &mut impl AsStoreMut, new_value: u64) {
+    pub fn set_gas_left(&self, new_value: u64) {
         self.with_wasmer_instance(|instance| {
-            set_remaining_points(store, instance, new_value);
+            set_remaining_points(instance, new_value);
             Ok(())
         })
         .expect("Wasmer instance is not set. This is a bug in the lifecycle.")
@@ -346,29 +257,39 @@ impl<A: BackendApi, S: Storage, Q: Querier> Environment<A, S, Q> {
     /// If the amount exceeds the available gas, the remaining gas is set to 0 and
     /// an VmError::GasDepletion error is returned.
     #[allow(unused)] // used in tests
-    pub fn decrease_gas_left(&self, store: &mut impl AsStoreMut, amount: u64) -> VmResult<()> {
+    pub fn decrease_gas_left(&self, amount: u64) -> VmResult<()> {
         self.with_wasmer_instance(|instance| {
-            let remaining = match get_remaining_points(store, instance) {
+            let remaining = match get_remaining_points(instance) {
                 MeteringPoints::Remaining(count) => count,
                 MeteringPoints::Exhausted => 0,
             };
             if amount > remaining {
-                set_remaining_points(store, instance, 0);
+                set_remaining_points(instance, 0);
                 Err(VmError::gas_depletion())
             } else {
-                set_remaining_points(store, instance, remaining - amount);
+                set_remaining_points(instance, remaining - amount);
                 Ok(())
             }
         })
     }
 
-    /// Creates a MemoryView.
-    /// This must be short living and not be used after the memory was grown.
-    pub fn memory<'a>(&self, store: &'a mut impl AsStoreMut) -> MemoryView<'a> {
-        self.memory
-            .as_ref()
-            .expect("Memory is not set. This is a bug in the lifecycle.")
-            .view(store)
+    pub fn memory(&self) -> Memory {
+        self.with_wasmer_instance(|instance| {
+            let first: Option<Memory> = instance
+                .exports
+                .iter()
+                .memories()
+                .next()
+                .map(|pair| pair.1.clone());
+            // Every contract in CosmWasm must have exactly one exported memory.
+            // This is ensured by `check_wasm`/`check_wasm_memories`, which is called for every
+            // contract added to the Cache as well as in integration tests.
+            // It is possible to bypass this check when using `Instance::from_code` but then you
+            // learn the hard way when this panics, or when trying to upload the contract to chain.
+            let memory = first.expect("A contract must have exactly one exported memory.");
+            Ok(memory)
+        })
+        .expect("Wasmer instance is not set. This is a bug in the lifecycle.")
     }
 
     /// Moves owned instances of storage and querier into the env.
@@ -389,13 +310,11 @@ impl<A: BackendApi, S: Storage, Q: Querier> Environment<A, S, Q> {
     }
 }
 
-pub struct ContextData<S, Q> {
+pub struct ContextData<S: Storage, Q: Querier> {
     gas_state: GasState,
     storage: Option<S>,
     storage_readonly: bool,
-    call_depth: usize,
     querier: Option<Q>,
-    debug_handler: Option<Rc<DebugHandlerFn>>,
     /// A non-owning link to the wasmer instance
     wasmer_instance: Option<NonNull<WasmerInstance>>,
 }
@@ -406,9 +325,7 @@ impl<S: Storage, Q: Querier> ContextData<S, Q> {
             gas_state: GasState::with_limit(gas_limit),
             storage: None,
             storage_readonly: true,
-            call_depth: 0,
             querier: None,
-            debug_handler: None,
             wasmer_instance: None,
         }
     }
@@ -416,10 +333,9 @@ impl<S: Storage, Q: Querier> ContextData<S, Q> {
 
 pub fn process_gas_info<A: BackendApi, S: Storage, Q: Querier>(
     env: &Environment<A, S, Q>,
-    store: &mut impl AsStoreMut,
     info: GasInfo,
 ) -> VmResult<()> {
-    let gas_left = env.get_gas_left(store);
+    let gas_left = env.get_gas_left();
 
     let new_limit = env.with_gas_state_mut(|gas_state| {
         gas_state.externally_used_gas += info.externally_used;
@@ -431,7 +347,7 @@ pub fn process_gas_info<A: BackendApi, S: Storage, Q: Querier>(
     });
 
     // This tells wasmer how much more gas it can consume from this point in time.
-    env.set_gas_left(store, new_limit);
+    env.set_gas_left(new_limit);
 
     if info.externally_used + info.cost > gas_left {
         Err(VmError::gas_depletion())
@@ -448,11 +364,11 @@ mod tests {
     use crate::errors::VmError;
     use crate::size::Size;
     use crate::testing::{MockApi, MockQuerier, MockStorage};
-    use crate::wasm_backend::{compile, make_store_with_engine};
+    use crate::wasm_backend::compile;
     use cosmwasm_std::{
         coins, from_binary, to_vec, AllBalanceResponse, BankQuery, Empty, QueryRequest,
     };
-    use wasmer::{imports, Function, Instance as WasmerInstance, Store};
+    use wasmer::{imports, Function, Instance as WasmerInstance};
 
     static CONTRACT: &[u8] = include_bytes!("../testdata/hackatom.wasm");
 
@@ -472,42 +388,39 @@ mod tests {
         gas_limit: u64,
     ) -> (
         Environment<MockApi, MockStorage, MockQuerier>,
-        Store,
         Box<WasmerInstance>,
     ) {
-        let env = Environment::new(MockApi::default(), gas_limit);
+        let env = Environment::new(MockApi::default(), gas_limit, false);
 
-        let (engine, module) = compile(CONTRACT, &[]).unwrap();
-        let mut store = make_store_with_engine(engine, TESTING_MEMORY_LIMIT);
-
+        let module = compile(CONTRACT, TESTING_MEMORY_LIMIT, &[]).unwrap();
+        let store = module.store();
         // we need stubs for all required imports
         let import_obj = imports! {
             "env" => {
-                "db_read" => Function::new_typed(&mut store, |_a: u32| -> u32 { 0 }),
-                "db_write" => Function::new_typed(&mut store, |_a: u32, _b: u32| {}),
-                "db_remove" => Function::new_typed(&mut store, |_a: u32| {}),
-                "db_scan" => Function::new_typed(&mut store, |_a: u32, _b: u32, _c: i32| -> u32 { 0 }),
-                "db_next" => Function::new_typed(&mut store, |_a: u32| -> u32 { 0 }),
-                "query_chain" => Function::new_typed(&mut store, |_a: u32| -> u32 { 0 }),
-                "addr_validate" => Function::new_typed(&mut store, |_a: u32| -> u32 { 0 }),
-                "addr_canonicalize" => Function::new_typed(&mut store, |_a: u32, _b: u32| -> u32 { 0 }),
-                "addr_humanize" => Function::new_typed(&mut store, |_a: u32, _b: u32| -> u32 { 0 }),
-                "secp256k1_verify" => Function::new_typed(&mut store, |_a: u32, _b: u32, _c: u32| -> u32 { 0 }),
-                "secp256k1_recover_pubkey" => Function::new_typed(&mut store, |_a: u32, _b: u32, _c: u32| -> u64 { 0 }),
-                "ed25519_verify" => Function::new_typed(&mut store, |_a: u32, _b: u32, _c: u32| -> u32 { 0 }),
-                "ed25519_batch_verify" => Function::new_typed(&mut store, |_a: u32, _b: u32, _c: u32| -> u32 { 0 }),
-                "keccak256" => Function::new_typed(&mut store, |_a: u32 | -> u64 { 0 }),
-                "debug" => Function::new_typed(&mut store, |_a: u32| {}),
-                "abort" => Function::new_typed(&mut store, |_a: u32| {}),
+                "db_read" => Function::new_native(store, |_a: u32| -> u32 { 0 }),
+                "db_write" => Function::new_native(store, |_a: u32, _b: u32| {}),
+                "db_remove" => Function::new_native(store, |_a: u32| {}),
+                "db_scan" => Function::new_native(store, |_a: u32, _b: u32, _c: i32| -> u32 { 0 }),
+                "db_next" => Function::new_native(store, |_a: u32| -> u32 { 0 }),
+                "query_chain" => Function::new_native(store, |_a: u32| -> u32 { 0 }),
+                "addr_validate" => Function::new_native(store, |_a: u32| -> u32 { 0 }),
+                "addr_canonicalize" => Function::new_native(store, |_a: u32, _b: u32| -> u32 { 0 }),
+                "addr_humanize" => Function::new_native(store, |_a: u32, _b: u32| -> u32 { 0 }),
+                "secp256k1_verify" => Function::new_native(store, |_a: u32, _b: u32, _c: u32| -> u32 { 0 }),
+                "keccak256_digest" => Function::new_native(store, |_a: u32 | -> u64 { 0 }),
+                "secp256k1_recover_pubkey" => Function::new_native(store, |_a: u32, _b: u32, _c: u32| -> u64 { 0 }),
+                "ed25519_verify" => Function::new_native(store, |_a: u32, _b: u32, _c: u32| -> u32 { 0 }),
+                "ed25519_batch_verify" => Function::new_native(store, |_a: u32, _b: u32, _c: u32| -> u32 { 0 }),
+                "debug" => Function::new_native(store, |_a: u32| {}),
             },
         };
-        let instance = Box::from(WasmerInstance::new(&mut store, &module, &import_obj).unwrap());
+        let instance = Box::from(WasmerInstance::new(&module, &import_obj).unwrap());
 
         let instance_ptr = NonNull::from(instance.as_ref());
         env.set_wasmer_instance(Some(instance_ptr));
-        env.set_gas_left(&mut store, gas_limit);
+        env.set_gas_left(gas_limit);
 
-        (env, store, instance)
+        (env, instance)
     }
 
     fn leave_default_data(env: &Environment<MockApi, MockStorage, MockQuerier>) {
@@ -524,7 +437,7 @@ mod tests {
 
     #[test]
     fn move_out_works() {
-        let (env, _store, _instance) = make_instance(TESTING_GAS_LIMIT);
+        let (env, _instance) = make_instance(TESTING_GAS_LIMIT);
 
         // empty data on start
         let (inits, initq) = env.move_out();
@@ -549,21 +462,21 @@ mod tests {
 
     #[test]
     fn process_gas_info_works_for_cost() {
-        let (env, mut store, _instance) = make_instance(100);
-        assert_eq!(env.get_gas_left(&mut store), 100);
+        let (env, _instance) = make_instance(100);
+        assert_eq!(env.get_gas_left(), 100);
 
         // Consume all the Gas that we allocated
-        process_gas_info(&env, &mut store, GasInfo::with_cost(70)).unwrap();
-        assert_eq!(env.get_gas_left(&mut store), 30);
-        process_gas_info(&env, &mut store, GasInfo::with_cost(4)).unwrap();
-        assert_eq!(env.get_gas_left(&mut store), 26);
-        process_gas_info(&env, &mut store, GasInfo::with_cost(6)).unwrap();
-        assert_eq!(env.get_gas_left(&mut store), 20);
-        process_gas_info(&env, &mut store, GasInfo::with_cost(20)).unwrap();
-        assert_eq!(env.get_gas_left(&mut store), 0);
+        process_gas_info(&env, GasInfo::with_cost(70)).unwrap();
+        assert_eq!(env.get_gas_left(), 30);
+        process_gas_info(&env, GasInfo::with_cost(4)).unwrap();
+        assert_eq!(env.get_gas_left(), 26);
+        process_gas_info(&env, GasInfo::with_cost(6)).unwrap();
+        assert_eq!(env.get_gas_left(), 20);
+        process_gas_info(&env, GasInfo::with_cost(20)).unwrap();
+        assert_eq!(env.get_gas_left(), 0);
 
         // Using one more unit of gas triggers a failure
-        match process_gas_info(&env, &mut store, GasInfo::with_cost(1)).unwrap_err() {
+        match process_gas_info(&env, GasInfo::with_cost(1)).unwrap_err() {
             VmError::GasDepletion { .. } => {}
             err => panic!("unexpected error: {:?}", err),
         }
@@ -571,21 +484,21 @@ mod tests {
 
     #[test]
     fn process_gas_info_works_for_externally_used() {
-        let (env, mut store, _instance) = make_instance(100);
-        assert_eq!(env.get_gas_left(&mut store), 100);
+        let (env, _instance) = make_instance(100);
+        assert_eq!(env.get_gas_left(), 100);
 
         // Consume all the Gas that we allocated
-        process_gas_info(&env, &mut store, GasInfo::with_externally_used(70)).unwrap();
-        assert_eq!(env.get_gas_left(&mut store), 30);
-        process_gas_info(&env, &mut store, GasInfo::with_externally_used(4)).unwrap();
-        assert_eq!(env.get_gas_left(&mut store), 26);
-        process_gas_info(&env, &mut store, GasInfo::with_externally_used(6)).unwrap();
-        assert_eq!(env.get_gas_left(&mut store), 20);
-        process_gas_info(&env, &mut store, GasInfo::with_externally_used(20)).unwrap();
-        assert_eq!(env.get_gas_left(&mut store), 0);
+        process_gas_info(&env, GasInfo::with_externally_used(70)).unwrap();
+        assert_eq!(env.get_gas_left(), 30);
+        process_gas_info(&env, GasInfo::with_externally_used(4)).unwrap();
+        assert_eq!(env.get_gas_left(), 26);
+        process_gas_info(&env, GasInfo::with_externally_used(6)).unwrap();
+        assert_eq!(env.get_gas_left(), 20);
+        process_gas_info(&env, GasInfo::with_externally_used(20)).unwrap();
+        assert_eq!(env.get_gas_left(), 0);
 
         // Using one more unit of gas triggers a failure
-        match process_gas_info(&env, &mut store, GasInfo::with_externally_used(1)).unwrap_err() {
+        match process_gas_info(&env, GasInfo::with_externally_used(1)).unwrap_err() {
             VmError::GasDepletion { .. } => {}
             err => panic!("unexpected error: {:?}", err),
         }
@@ -593,46 +506,46 @@ mod tests {
 
     #[test]
     fn process_gas_info_works_for_cost_and_externally_used() {
-        let (env, mut store, _instance) = make_instance(100);
-        assert_eq!(env.get_gas_left(&mut store), 100);
+        let (env, _instance) = make_instance(100);
+        assert_eq!(env.get_gas_left(), 100);
         let gas_state = env.with_gas_state(|gas_state| gas_state.clone());
         assert_eq!(gas_state.gas_limit, 100);
         assert_eq!(gas_state.externally_used_gas, 0);
 
-        process_gas_info(&env, &mut store, GasInfo::new(17, 4)).unwrap();
-        assert_eq!(env.get_gas_left(&mut store), 79);
+        process_gas_info(&env, GasInfo::new(17, 4)).unwrap();
+        assert_eq!(env.get_gas_left(), 79);
         let gas_state = env.with_gas_state(|gas_state| gas_state.clone());
         assert_eq!(gas_state.gas_limit, 100);
         assert_eq!(gas_state.externally_used_gas, 4);
 
-        process_gas_info(&env, &mut store, GasInfo::new(9, 0)).unwrap();
-        assert_eq!(env.get_gas_left(&mut store), 70);
+        process_gas_info(&env, GasInfo::new(9, 0)).unwrap();
+        assert_eq!(env.get_gas_left(), 70);
         let gas_state = env.with_gas_state(|gas_state| gas_state.clone());
         assert_eq!(gas_state.gas_limit, 100);
         assert_eq!(gas_state.externally_used_gas, 4);
 
-        process_gas_info(&env, &mut store, GasInfo::new(0, 70)).unwrap();
-        assert_eq!(env.get_gas_left(&mut store), 0);
+        process_gas_info(&env, GasInfo::new(0, 70)).unwrap();
+        assert_eq!(env.get_gas_left(), 0);
         let gas_state = env.with_gas_state(|gas_state| gas_state.clone());
         assert_eq!(gas_state.gas_limit, 100);
         assert_eq!(gas_state.externally_used_gas, 74);
 
         // More cost fail but do not change stats
-        match process_gas_info(&env, &mut store, GasInfo::new(1, 0)).unwrap_err() {
+        match process_gas_info(&env, GasInfo::new(1, 0)).unwrap_err() {
             VmError::GasDepletion { .. } => {}
             err => panic!("unexpected error: {:?}", err),
         }
-        assert_eq!(env.get_gas_left(&mut store), 0);
+        assert_eq!(env.get_gas_left(), 0);
         let gas_state = env.with_gas_state(|gas_state| gas_state.clone());
         assert_eq!(gas_state.gas_limit, 100);
         assert_eq!(gas_state.externally_used_gas, 74);
 
         // More externally used fails and changes stats
-        match process_gas_info(&env, &mut store, GasInfo::new(0, 1)).unwrap_err() {
+        match process_gas_info(&env, GasInfo::new(0, 1)).unwrap_err() {
             VmError::GasDepletion { .. } => {}
             err => panic!("unexpected error: {:?}", err),
         }
-        assert_eq!(env.get_gas_left(&mut store), 0);
+        assert_eq!(env.get_gas_left(), 0);
         let gas_state = env.with_gas_state(|gas_state| gas_state.clone());
         assert_eq!(gas_state.gas_limit, 100);
         assert_eq!(gas_state.externally_used_gas, 75);
@@ -642,13 +555,13 @@ mod tests {
     fn process_gas_info_zeros_gas_left_when_exceeded() {
         // with_externally_used
         {
-            let (env, mut store, _instance) = make_instance(100);
-            let result = process_gas_info(&env, &mut store, GasInfo::with_externally_used(120));
+            let (env, _instance) = make_instance(100);
+            let result = process_gas_info(&env, GasInfo::with_externally_used(120));
             match result.unwrap_err() {
                 VmError::GasDepletion { .. } => {}
                 err => panic!("unexpected error: {:?}", err),
             }
-            assert_eq!(env.get_gas_left(&mut store), 0);
+            assert_eq!(env.get_gas_left(), 0);
             let gas_state = env.with_gas_state(|gas_state| gas_state.clone());
             assert_eq!(gas_state.gas_limit, 100);
             assert_eq!(gas_state.externally_used_gas, 120);
@@ -656,13 +569,13 @@ mod tests {
 
         // with_cost
         {
-            let (env, mut store, _instance) = make_instance(100);
-            let result = process_gas_info(&env, &mut store, GasInfo::with_cost(120));
+            let (env, _instance) = make_instance(100);
+            let result = process_gas_info(&env, GasInfo::with_cost(120));
             match result.unwrap_err() {
                 VmError::GasDepletion { .. } => {}
                 err => panic!("unexpected error: {:?}", err),
             }
-            assert_eq!(env.get_gas_left(&mut store), 0);
+            assert_eq!(env.get_gas_left(), 0);
             let gas_state = env.with_gas_state(|gas_state| gas_state.clone());
             assert_eq!(gas_state.gas_limit, 100);
             assert_eq!(gas_state.externally_used_gas, 0);
@@ -671,26 +584,26 @@ mod tests {
 
     #[test]
     fn process_gas_info_works_correctly_with_gas_consumption_in_wasmer() {
-        let (env, mut store, _instance) = make_instance(100);
-        assert_eq!(env.get_gas_left(&mut store), 100);
+        let (env, _instance) = make_instance(100);
+        assert_eq!(env.get_gas_left(), 100);
 
         // Some gas was consumed externally
-        process_gas_info(&env, &mut store, GasInfo::with_externally_used(50)).unwrap();
-        assert_eq!(env.get_gas_left(&mut store), 50);
-        process_gas_info(&env, &mut store, GasInfo::with_externally_used(4)).unwrap();
-        assert_eq!(env.get_gas_left(&mut store), 46);
+        process_gas_info(&env, GasInfo::with_externally_used(50)).unwrap();
+        assert_eq!(env.get_gas_left(), 50);
+        process_gas_info(&env, GasInfo::with_externally_used(4)).unwrap();
+        assert_eq!(env.get_gas_left(), 46);
 
         // Consume 20 gas directly in wasmer
-        env.decrease_gas_left(&mut store, 20).unwrap();
-        assert_eq!(env.get_gas_left(&mut store), 26);
+        env.decrease_gas_left(20).unwrap();
+        assert_eq!(env.get_gas_left(), 26);
 
-        process_gas_info(&env, &mut store, GasInfo::with_externally_used(6)).unwrap();
-        assert_eq!(env.get_gas_left(&mut store), 20);
-        process_gas_info(&env, &mut store, GasInfo::with_externally_used(20)).unwrap();
-        assert_eq!(env.get_gas_left(&mut store), 0);
+        process_gas_info(&env, GasInfo::with_externally_used(6)).unwrap();
+        assert_eq!(env.get_gas_left(), 20);
+        process_gas_info(&env, GasInfo::with_externally_used(20)).unwrap();
+        assert_eq!(env.get_gas_left(), 0);
 
         // Using one more unit of gas triggers a failure
-        match process_gas_info(&env, &mut store, GasInfo::with_externally_used(1)).unwrap_err() {
+        match process_gas_info(&env, GasInfo::with_externally_used(1)).unwrap_err() {
             VmError::GasDepletion { .. } => {}
             err => panic!("unexpected error: {:?}", err),
         }
@@ -698,7 +611,7 @@ mod tests {
 
     #[test]
     fn is_storage_readonly_defaults_to_true() {
-        let (env, _store, _instance) = make_instance(TESTING_GAS_LIMIT);
+        let (env, _instance) = make_instance(TESTING_GAS_LIMIT);
         leave_default_data(&env);
 
         assert!(env.is_storage_readonly());
@@ -706,7 +619,7 @@ mod tests {
 
     #[test]
     fn set_storage_readonly_can_change_flag() {
-        let (env, _store, _instance) = make_instance(TESTING_GAS_LIMIT);
+        let (env, _instance) = make_instance(TESTING_GAS_LIMIT);
         leave_default_data(&env);
 
         // change
@@ -724,25 +637,23 @@ mod tests {
 
     #[test]
     fn call_function_works() {
-        let (env, mut store, _instance) = make_instance(TESTING_GAS_LIMIT);
+        let (env, _instance) = make_instance(TESTING_GAS_LIMIT);
         leave_default_data(&env);
 
-        let result = env
-            .call_function(&mut store, "allocate", &[10u32.into()])
-            .unwrap();
+        let result = env.call_function("allocate", &[10u32.into()]).unwrap();
         let ptr = ref_to_u32(&result[0]).unwrap();
         assert!(ptr > 0);
     }
 
     #[test]
     fn call_function_fails_for_missing_instance() {
-        let (env, mut store, _instance) = make_instance(TESTING_GAS_LIMIT);
+        let (env, _instance) = make_instance(TESTING_GAS_LIMIT);
         leave_default_data(&env);
 
         // Clear context's wasmer_instance
         env.set_wasmer_instance(None);
 
-        let res = env.call_function(&mut store, "allocate", &[]);
+        let res = env.call_function("allocate", &[]);
         match res.unwrap_err() {
             VmError::UninitializedContextData { kind, .. } => assert_eq!(kind, "wasmer_instance"),
             err => panic!("Unexpected error: {:?}", err),
@@ -751,10 +662,10 @@ mod tests {
 
     #[test]
     fn call_function_fails_for_missing_function() {
-        let (env, mut store, _instance) = make_instance(TESTING_GAS_LIMIT);
+        let (env, _instance) = make_instance(TESTING_GAS_LIMIT);
         leave_default_data(&env);
 
-        let res = env.call_function(&mut store, "doesnt_exist", &[]);
+        let res = env.call_function("doesnt_exist", &[]);
         match res.unwrap_err() {
             VmError::ResolveErr { msg, .. } => {
                 assert_eq!(msg, "Could not get export: Missing export doesnt_exist");
@@ -765,19 +676,18 @@ mod tests {
 
     #[test]
     fn call_function0_works() {
-        let (env, mut store, _instance) = make_instance(TESTING_GAS_LIMIT);
+        let (env, _instance) = make_instance(TESTING_GAS_LIMIT);
         leave_default_data(&env);
 
-        env.call_function0(&mut store, "interface_version_8", &[])
-            .unwrap();
+        env.call_function0("interface_version_8", &[]).unwrap();
     }
 
     #[test]
     fn call_function0_errors_for_wrong_result_count() {
-        let (env, mut store, _instance) = make_instance(TESTING_GAS_LIMIT);
+        let (env, _instance) = make_instance(TESTING_GAS_LIMIT);
         leave_default_data(&env);
 
-        let result = env.call_function0(&mut store, "allocate", &[10u32.into()]);
+        let result = env.call_function0("allocate", &[10u32.into()]);
         match result.unwrap_err() {
             VmError::ResultMismatch {
                 function_name,
@@ -795,28 +705,24 @@ mod tests {
 
     #[test]
     fn call_function1_works() {
-        let (env, mut store, _instance) = make_instance(TESTING_GAS_LIMIT);
+        let (env, _instance) = make_instance(TESTING_GAS_LIMIT);
         leave_default_data(&env);
 
-        let result = env
-            .call_function1(&mut store, "allocate", &[10u32.into()])
-            .unwrap();
+        let result = env.call_function1("allocate", &[10u32.into()]).unwrap();
         let ptr = ref_to_u32(&result).unwrap();
         assert!(ptr > 0);
     }
 
     #[test]
     fn call_function1_errors_for_wrong_result_count() {
-        let (env, mut store, _instance) = make_instance(TESTING_GAS_LIMIT);
+        let (env, _instance) = make_instance(TESTING_GAS_LIMIT);
         leave_default_data(&env);
 
-        let result = env
-            .call_function1(&mut store, "allocate", &[10u32.into()])
-            .unwrap();
+        let result = env.call_function1("allocate", &[10u32.into()]).unwrap();
         let ptr = ref_to_u32(&result).unwrap();
         assert!(ptr > 0);
 
-        let result = env.call_function1(&mut store, "deallocate", &[ptr.into()]);
+        let result = env.call_function1("deallocate", &[ptr.into()]);
         match result.unwrap_err() {
             VmError::ResultMismatch {
                 function_name,
@@ -834,7 +740,7 @@ mod tests {
 
     #[test]
     fn with_storage_from_context_set_get() {
-        let (env, _store, _instance) = make_instance(TESTING_GAS_LIMIT);
+        let (env, _instance) = make_instance(TESTING_GAS_LIMIT);
         leave_default_data(&env);
 
         let val = env
@@ -867,7 +773,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "A panic occurred in the callback.")]
     fn with_storage_from_context_handles_panics() {
-        let (env, _store, _instance) = make_instance(TESTING_GAS_LIMIT);
+        let (env, _instance) = make_instance(TESTING_GAS_LIMIT);
         leave_default_data(&env);
 
         env.with_storage_from_context::<_, ()>(|_store| {
@@ -878,7 +784,7 @@ mod tests {
 
     #[test]
     fn with_querier_from_context_works() {
-        let (env, _store, _instance) = make_instance(TESTING_GAS_LIMIT);
+        let (env, _instance) = make_instance(TESTING_GAS_LIMIT);
         leave_default_data(&env);
 
         let res = env
@@ -901,7 +807,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "A panic occurred in the callback.")]
     fn with_querier_from_context_handles_panics() {
-        let (env, _store, _instance) = make_instance(TESTING_GAS_LIMIT);
+        let (env, _instance) = make_instance(TESTING_GAS_LIMIT);
         leave_default_data(&env);
 
         env.with_querier_from_context::<_, ()>(|_querier| {

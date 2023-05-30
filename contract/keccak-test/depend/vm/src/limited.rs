@@ -103,7 +103,8 @@ mod tests {
             "apple".to_string(),
             "banana".to_string(),
         ]
-        .into_iter()
+        .iter()
+        .cloned()
         .collect();
         assert_eq!(
             fruits.to_string_limited(100),
@@ -139,7 +140,8 @@ mod tests {
             "apple".to_string(),
             "banana".to_string(),
         ]
-        .into_iter()
+        .iter()
+        .cloned()
         .collect();
         assert_eq!(
             fruits.to_string_limited(100),
@@ -178,7 +180,8 @@ mod tests {
             "apple".to_string(),
             "banana".to_string(),
         ]
-        .into_iter()
+        .iter()
+        .cloned()
         .collect();
         assert_eq!(fruits.to_string_limited(15), "{... 3 elements}");
     }
