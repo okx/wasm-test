@@ -2,13 +2,16 @@ use backtrace::Backtrace;
 use std::sync::Arc;
 #[cfg(feature = "cranelift")]
 use wasmer::Cranelift;
-#[cfg(not(feature = "cranelift"))]
+#[cfg(feature = "singlepass")]
 use wasmer::Singlepass;
 use wasmer::{
     wasmparser::Operator, BaseTunables, CompilerConfig, Engine, ModuleMiddleware, Pages, Store,
     Target, WASM_PAGE_SIZE,
 };
 use wasmer_middlewares::Metering;
+
+#[cfg(feature = "llvm")]
+use wasmer::LLVM;
 
 use crate::size::Size;
 
@@ -37,9 +40,9 @@ pub fn make_engine(middlewares: &[Arc<dyn ModuleMiddleware>]) -> Engine {
     let deterministic = Arc::new(Gatekeeper::default());
     let metering = Arc::new(Metering::new(gas_limit, cost));
 
-    let bt = Backtrace::new();
-    println!("backtrace dump start ===============");
-    println!("{:?}", bt);
+    // let bt = Backtrace::new();
+    // println!("backtrace dump start ===============");
+    // println!("{:?}", bt);
 
     #[cfg(feature = "cranelift")]
     {
@@ -53,7 +56,19 @@ pub fn make_engine(middlewares: &[Arc<dyn ModuleMiddleware>]) -> Engine {
         compiler.into()
     }
 
-    #[cfg(not(feature = "cranelift"))]
+    #[cfg(feature = "llvm")]
+    {
+        let mut compiler = LLVM::default();
+        println!("-------------LLVM------------------");
+        for middleware in middlewares {
+            compiler.push_middleware(middleware.clone());
+        }
+        compiler.push_middleware(deterministic);
+        compiler.push_middleware(metering);
+        compiler.into()
+    }
+
+    #[cfg(feature = "singlepass")]
     {
         let mut compiler = Singlepass::default();
         println!("-------------Singlepass------------------");
