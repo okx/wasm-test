@@ -9,25 +9,7 @@
       ],
       "properties": {
         "test": {
-          "type": "object",
-          "required": [
-            "count",
-            "data",
-            "mode"
-          ],
-          "properties": {
-            "count": {
-              "type": "integer",
-              "format": "int32"
-            },
-            "data": {
-              "type": "string"
-            },
-            "mode": {
-              "type": "integer",
-              "format": "int32"
-            }
-          }
+          "type": "object"
         }
       },
       "additionalProperties": false
